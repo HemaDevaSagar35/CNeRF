@@ -31,6 +31,25 @@ def parsing_img(bisNet, image, to_tensor, argmax=True):
         segmap = id_remap(segmap, 'celebahq')
     return img, segmap
 
+def collapse_segment(segmap):
+    """collpase 19 segments types to 12
+    """
+    print("entered")
+    print(sum(sum(segmap==5)))
+    segmap[segmap == 5] = 4   #collapse eyes
+    print(sum(sum(segmap==5)))
+    segmap[segmap == 7] = 6   #collapse eye brow
+    segmap[segmap == 9] = 8   #collapse ear
+    segmap[segmap == 11] = 10 #collapse mouth
+    segmap[segmap == 12] = 10
+    segmap[segmap == 17] = 16 #collapse neck
+    segmap[segmap == 18] = 16
+    segmap[segmap == 16] = 17
+    # print(sum(sum(segmap)))
+    return segmap
+
+
+
 COLOR_MAP = {
             0: [0, 0, 0], 
             1: [204, 0, 0],
@@ -81,14 +100,18 @@ def face_parsing(img_path, save_dir, bisNet):
     # img = Image.open(os.path.join(save_dir, 'images512x512', img_path)).convert('RGB')
     img = Image.open(img_path).convert('RGB')
     _, seg_label = parsing_img(bisNet, img.resize((512, 512)), to_tensor)
+    seg_label = collapse_segment(seg_label)
     seg_mask = seg_label.detach().cpu().numpy()[0][0]
+    #collapse
+    
+    #collapse
     seg_mask = Image.fromarray(seg_mask.astype(np.uint8), mode="L")
     img_ind = os.path.basename(img_path)
-    save_path = os.path.join(save_dir, 'masks1024x1024', img_ind)
+    save_path = os.path.join(save_dir, 'masks512x512', img_ind)
     seg_mask.save(save_path)
 
     seg_label_rgb = vis_condition_img_celebahq(seg_label)
-    save_path = os.path.join(save_dir, 'maskcolors1024x1024', img_ind)
+    save_path = os.path.join(save_dir, 'maskcolors512x512', img_ind)
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     utils.save_image(seg_label_rgb, save_path, normalize=True,range=(-1, 1))
 
