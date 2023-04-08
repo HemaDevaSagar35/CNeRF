@@ -84,7 +84,7 @@ class LocalGeneratorSiren(nn.Module):
     # Make sure the dimensions are consistent
     # summary(gen, [(1, 64*64*24, 3), (1, 1, 640),(1, 1, 640), (1,64*64*24, 3)], device = 'cpu')
 
-    def __init__(self, hidden_dim=128):
+    def __init__(self, hidden_dim=128, semantic_classes = 12):
         super().__init__()
         # self.device = device
         # self.input_dim = input_dim
@@ -175,6 +175,7 @@ class GeneratorStackSiren(nn.Module):
     def forward(self, input, ray_directions, z_sample_one, z_sample_two = None):
         # if sample two is not None then we sample between sample one and sample two latent codes
         # for every generator
+        # output would batch size x K x (64x64 x 24) x (128 + 3 + 1 + 1)
         freq_sample_one, phase_sample_one = self.mapping_network(z_sample_one)
         freq_sample_two, phase_sample_two = self.mapping_network(z_sample_two) if z_sample_two is not None else (None, None)
 
