@@ -162,15 +162,17 @@ class GeneratorStackSiren(nn.Module):
     '''
     def __init__(self, z_dim, hidden_dim, semantic_classes, blocks):
         super().__init__()
+        # self.device = device
         self.mapping_network = CustomMappingNetwork(z_dim, hidden_dim*2, hidden_dim*2*5, n_blocks=blocks)
         self.generator_list = []
         self.semantic_classes = semantic_classes
         for i in range(semantic_classes):
             self.generator_list.append(
-                LocalGeneratorSiren(hidden_dim)
+                LocalGeneratorSiren(hidden_dim, semantic_classes)
                 )
         
         self.generator_list = nn.ModuleList(self.generator_list)
+
         
     def forward(self, input, ray_directions, z_sample_one, z_sample_two = None):
         # if sample two is not None then we sample between sample one and sample two latent codes
