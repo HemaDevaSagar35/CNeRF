@@ -185,10 +185,12 @@ class GeneratorStackSiren(nn.Module):
         for i in range(self.semantic_classes):
             print("happening for {}".format(i))
             sample = torch.randint(0, 2, (1,))[0]
-            if (freq_sample_two is None) or (sample == 0):
+            if (z_sample_two is None) or (sample == 0):
+                # freq_sample_one, phase_sample_one = self.mapping_network(z_sample_one)
                 gen_output = self.generator_list[i](input, freq_sample_one, phase_sample_one, ray_directions)
                 gen_output = torch.unsqueeze(gen_output, 1)
             else:
+                # freq_sample_two, phase_sample_two = self.mapping_network(z_sample_two)
                 gen_output = self.generator_list[i](input, freq_sample_two, phase_sample_two, ray_directions)
                 gen_output = torch.unsqueeze(gen_output, 1)
 
