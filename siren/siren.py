@@ -41,50 +41,63 @@ class UniformBoxWarp(nn.Module):
         return coordinates * self.scale_factor
 
 class CustomMappingNetwork(nn.Module):
-    def __init__(self, z_dim, map_hidden_dim, map_output_dim, n_blocks=3):
+    def __init__(self, z_dim, map_hidden_dim, n_blocks=3):
         super().__init__()
         self.network = [nn.Linear(z_dim, map_hidden_dim),
                         nn.LeakyReLU(0.2, inplace=True)]
-        for _ in range(n_blocks):
+        for _ in range(n_blocks-1):
             self.network.append(nn.Linear(map_hidden_dim, map_hidden_dim))
             self.network.append(nn.LeakyReLU(0.2, inplace=True))
         
-        self.network.append(nn.Linear(map_hidden_dim, map_output_dim))
+        # self.network.append(nn.Linear(map_hidden_dim, map_output_dim))
         self.network = nn.Sequential(*self.network)
         self.network.apply(kaiming_leaky_init)
-        with torch.no_grad():
-            self.network[-1].weight *= 0.25
+        # with torch.no_grad():
+        #     self.network[-1].weight *= 0.25
 
     def forward(self, z):
-        frequencies_offsets = self.network(z) # z: (n_batch * n_point, n_channel)
-        frequencies = frequencies_offsets[..., :frequencies_offsets.shape[-1]//2]
-        phase_shifts = frequencies_offsets[..., frequencies_offsets.shape[-1]//2:]
-
-        return frequencies, phase_shifts
+        # frequencies_offsets = self.network(z) # z: (n_batch * n_point, n_channel)
+        # frequencies = frequencies_offsets[..., :frequencies_offsets.shape[-1]//2]
+        # phase_shifts = frequencies_offsets[..., frequencies_offsets.shape[-1]//2:]
+        latent_codes = self.network(z)
+        # return frequencies, phase_shifts
+        return latent_codes
     
 
 class FiLMLayer(nn.Module):
     '''This layer follows the equation 
        phi(j) = sin((Wx + b)*freq + phase)
+       assuming latent dim = 2*hidden_dim
     '''
-    def __init__(self, input_dim, hidden_dim):
+    def __init__(self, input_dim, hidden_dim = 128, latent_dim = 256):
         super().__init__()
         self.layer = nn.Linear(input_dim, hidden_dim)
 
-    def forward(self, x, freq, phase_shift):
+        self.freq = nn.Linear(latent_dim, hidden_dim)
+        self.phase = nn.Linear(latent_dim, hidden_dim)
+
+    def forward(self, x, latent_code, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25):
         x = self.layer(x)
-        if x.shape[1] != freq.shape[1]:
-            print("happening here")
-            freq = freq.unsqueeze(1).expand_as(x) 
-            phase_shift = phase_shift.unsqueeze(1).expand_as(x)
+        # if x.shape[1] != freq.shape[1]:
+        #     print("happening here")
+        #     freq = freq.unsqueeze(1).expand_as(x) 
+        #     phase_shift = phase_shift.unsqueeze(1).expand_as(x)
+        freq = self.freq(latent_code)
+        phase_shift = self.phase(latent_code)
         return torch.sin(freq * x + phase_shift)
 
 class LocalGeneratorSiren(nn.Module):
-    '''shape network is 3 layers deep and texture is 2 layers deep'''
+    '''shape network is 3 layers deep and texture is 2 layers deep
+    parameters:
+    1. (3 x 128 + 128 + 256*128*2) + 4*(128x128 + 128 + 256*128*2) = 512 + 65792 + 66048 + 263168 = 395520
+    2. (131 x 128 + 128) + (128*3 + 3) + (131 + 1) + (128 + 1) = 16896 + 387 + 132 + 129 = 17544
+    total = 395520 + 17544 = 413064
+
+    '''
     # Make sure the dimensions are consistent
     # summary(gen, [(1, 64*64*24, 3), (1, 1, 640),(1, 1, 640), (1,64*64*24, 3)], device = 'cpu')
 
-    def __init__(self, hidden_dim=128, semantic_classes = 12):
+    def __init__(self, hidden_dim=128, latent_dim = 256, semantic_classes = 12):
         super().__init__()
         # self.device = device
         # self.input_dim = input_dim
@@ -92,14 +105,14 @@ class LocalGeneratorSiren(nn.Module):
         # self.output_dim = output_dim
 
         self.shape_network = nn.ModuleList([
-            FiLMLayer(3, hidden_dim),
-            FiLMLayer(hidden_dim, hidden_dim),
-            FiLMLayer(hidden_dim, hidden_dim)
+            FiLMLayer(3, hidden_dim, latent_dim),
+            FiLMLayer(hidden_dim, hidden_dim,latent_dim),
+            FiLMLayer(hidden_dim, hidden_dim, latent_dim)
         ])
 
         self.texture_network = nn.ModuleList([
-            FiLMLayer(hidden_dim, hidden_dim),
-            FiLMLayer(hidden_dim, hidden_dim)
+            FiLMLayer(hidden_dim, hidden_dim, latent_dim),
+            FiLMLayer(hidden_dim, hidden_dim, latent_dim)
         ]) 
 
         self.feature_layer = nn.Linear(hidden_dim + 3, hidden_dim)
@@ -125,7 +138,7 @@ class LocalGeneratorSiren(nn.Module):
         # a box of side-length 0.24, since the camera has such a narrow FOV. For other scenes, with higher FOV, probably needs to be bigger.
         self.gridwarper = UniformBoxWarp(0.24)
 
-    def forward(self, input, latent_code_freq, latent_code_phase, ray_directions):
+    def forward(self, input, latent_code, ray_directions, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25):
         # ray direction is the view angles
         # print("input is")
         print(input.shape)
@@ -134,16 +147,18 @@ class LocalGeneratorSiren(nn.Module):
         # latent_code_freq = latent_code_freq*15 + 30 #something we need to dabble with later
         # print(x.shape)
         for index, layer in enumerate(self.shape_network):
-            start = index * self.hidden_dim
-            end = (index + 1) * self.hidden_dim
-            x = layer(x, latent_code_freq[..., start:end], latent_code_phase[..., start:end])
+            # start = index * self.hidden_dim
+            # end = (index + 1) * self.hidden_dim
+            # x = layer(x, latent_code_freq[..., start:end], latent_code_phase[..., start:end])
+            x = layer(x, latent_code, freq_bias_init, freq_std_init, phase_bias_init, phase_std_init)
         # print(x.shape)
         mask_input = torch.cat([ray_directions, x], axis=-1)
 
         for idx, layer in enumerate(self.texture_network):
-            start = (index + idx + 1)*self.hidden_dim
-            end = (index + idx + 2)*self.hidden_dim
-            x = layer(x, latent_code_freq[..., start:end], latent_code_phase[..., start:end])
+            # start = (index + idx + 1)*self.hidden_dim
+            # end = (index + idx + 2)*self.hidden_dim
+            # x = layer(x, latent_code_freq[..., start:end], latent_code_phase[..., start:end])
+            x = layer(x, latent_code, freq_bias_init, freq_std_init, phase_bias_init, phase_std_init)
         
         feature_input = torch.cat([ray_directions, x], axis=-1)
 
@@ -159,41 +174,63 @@ class LocalGeneratorSiren(nn.Module):
 class GeneratorStackSiren(nn.Module):
     '''Stack all the local generator networks
        hidden_dim=128, semantic_classes = 12, blocks = 3
+
+       parameters calculation: 
+        1. mapping: (100*256 + 256) + 2*(256*256 + 256) = 25856 + 131584 = 157440
+        2. generator: 12*413064 = 4956768
+        total = 157440 + 4956768 = 
     '''
-    def __init__(self, z_dim, hidden_dim, semantic_classes, blocks):
+    def __init__(self, z_dim, hidden_dim, latent_dim, semantic_classes, blocks):
         super().__init__()
         # self.device = device
-        self.mapping_network = CustomMappingNetwork(z_dim, hidden_dim*2, hidden_dim*2*5, n_blocks=blocks)
+        self.mapping_network = CustomMappingNetwork(z_dim, latent_dim, n_blocks=blocks)
         self.generator_list = []
         self.semantic_classes = semantic_classes
         for i in range(semantic_classes):
             self.generator_list.append(
-                LocalGeneratorSiren(hidden_dim, semantic_classes)
+                LocalGeneratorSiren(hidden_dim, latent_dim, semantic_classes)
                 )
         
         self.generator_list = nn.ModuleList(self.generator_list)
 
-        
-    def forward(self, input, ray_directions, z_sample_one, z_sample_two = None):
+    def extract_latent(self, input):
+        return self.mapping_network(input)
+
+    def shuffle_latent(self, semantic_classes, latent_code_one, latent_code_two):
+        # I am only shuffling full latent code not doing shuffling at texture and shape level
+        # N x 256 , N x 256 - 12
+        shuffled_codes = []
+        for i in range(semantic_classes):
+            ith_level = []
+            for j in range(latent_code_one.shape[0]):
+                sample = torch.randint(0, 2, (1,))[0]
+                if sample == 0:
+                    ith_level.append(latent_code_one[j:j+1,:])
+                else:
+                    ith_level.append(latent_code_one[j:j+1,:])
+            ith_level = torch.cat(ith_level, axis=0)
+            ith_level = ith_level.unsqueeze(0)
+
+            shuffled_codes.append(ith_level)
+        return torch.cat(shuffled_codes, axis=0)
+
+    def forward(self, input, ray_directions, z_sample_one, z_sample_two, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25):
         # if sample two is not None then we sample between sample one and sample two latent codes
         # for every generator
         # output would batch size x K x (64x64 x 24) x (128 + 3 + 1 + 1)
-        freq_sample_one, phase_sample_one = self.mapping_network(z_sample_one)
-        freq_sample_two, phase_sample_two = self.mapping_network(z_sample_two) if z_sample_two is not None else (None, None)
-
+        # this one is for training
+        latent_code_combined = self.mapping_network(torch.cat([z_sample_one, z_sample_two], axis=0))
+        # freq_sample_one, phase_sample_one = self.mapping_network(z_sample_one)
+        # freq_sample_two, phase_sample_two = self.mapping_network(z_sample_two) if z_sample_two is not None else (None, None)
+        N = latent_code_combined.shape[0] // 2
+        latent_codes_combined = self.shuffle_latent(self.semantic_classes, latent_code_combined[:N,:], latent_code_combined[:N,:])
+        #latent_codes_combined ----> K x N x 256
+        #input, latent_codes, ray_directions, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25)
         outputs = []
         for i in range(self.semantic_classes):
-            print("happening for {}".format(i))
-            sample = torch.randint(0, 2, (1,))[0]
-            if (z_sample_two is None) or (sample == 0):
-                # freq_sample_one, phase_sample_one = self.mapping_network(z_sample_one)
-                gen_output = self.generator_list[i](input, freq_sample_one, phase_sample_one, ray_directions)
-                gen_output = torch.unsqueeze(gen_output, 1)
-            else:
-                # freq_sample_two, phase_sample_two = self.mapping_network(z_sample_two)
-                gen_output = self.generator_list[i](input, freq_sample_two, phase_sample_two, ray_directions)
-                gen_output = torch.unsqueeze(gen_output, 1)
-
+            gen_output = self.generator_list[i](input, latent_codes_combined[i], ray_directions, freq_bias_init,  freq_std_init, phase_bias_init, phase_std_init = 0.25)
+            gen_output = torch.unsqueeze(gen_output, 1)
+        
             outputs.append(gen_output)
         
         return torch.cat(outputs, axis=1)
