@@ -102,7 +102,7 @@ class LocalGeneratorSiren(nn.Module):
         # self.device = device
         # self.input_dim = input_dim
         self.hidden_dim = hidden_dim
-        # self.output_dim = output_dim
+        # # self.output_dim = output_dim
 
         self.shape_network = nn.ModuleList([
             FiLMLayer(3, hidden_dim, latent_dim),
@@ -120,8 +120,8 @@ class LocalGeneratorSiren(nn.Module):
         self.mask_layer = nn.Linear(hidden_dim + 3, 1)
         self.sdf_layer = nn.Linear(hidden_dim, 1)
 
-        # The initialization below are blatantly adapted from FeNERF repo. 
-        #TODO: Their implication need to be further understood
+        # # The initialization below are blatantly adapted from FeNERF repo. 
+        # #: Their implication need to be further understood
         self.shape_network.apply(frequency_init(25))
         self.texture_network.apply(frequency_init(25))
 
@@ -132,34 +132,47 @@ class LocalGeneratorSiren(nn.Module):
 
         self.shape_network[0].apply(modified_first_sine_init)
 
-        # self.spatial_embeddings = nn.Parameter(torch.randn(1, 32, 96, 96, 96)*0.01)
+        # # self.spatial_embeddings = nn.Parameter(torch.randn(1, 32, 96, 96, 96)*0.01)
         
-        # !! Important !! Set this value to the expected side-length of your scene. e.g. for for faces, heads usually fit in
-        # a box of side-length 0.24, since the camera has such a narrow FOV. For other scenes, with higher FOV, probably needs to be bigger.
+        # # !! Important !! Set this value to the expected side-length of your scene. e.g. for for faces, heads usually fit in
+        # # a box of side-length 0.24, since the camera has such a narrow FOV. For other scenes, with higher FOV, probably needs to be bigger.
         self.gridwarper = UniformBoxWarp(0.24)
+    
+    # def get_init_sdf(self, input, latent_code, ray_directions, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25):
+    #     input = self.gridwarper(input) #modifier 1
+    #     x = input
+    #     j = 0
+    #     for index, layer in enumerate(self.shape_network):
+    #         x = layer(x, latent_code[0, j], freq_bias_init, freq_std_init, phase_bias_init, phase_std_init)
+    #         j += 1
+    #     for idx, layer in enumerate(self.texture_network):
+    #         x = layer(x, latent_code[0, j], freq_bias_init, freq_std_init, phase_bias_init, phase_std_init)
+    #         j += 1
+    #     return self.sdf_layer(x)
+    
+    # def forward(self, x, latent_code):
+        
+    #     return self.shape_network(x, latent_code)
 
     def forward(self, input, latent_code, ray_directions, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25):
         # ray direction is the view angles
-        # print("input is")
+        print("input is")
         print(input.shape)
         input = self.gridwarper(input) #modifier 1
         x = input
         # latent_code_freq = latent_code_freq*15 + 30 #something we need to dabble with later
-        # print(x.shape)
-        for index, layer in enumerate(self.shape_network):
-            # start = index * self.hidden_dim
-            # end = (index + 1) * self.hidden_dim
-            # x = layer(x, latent_code_freq[..., start:end], latent_code_phase[..., start:end])
-            x = layer(x, latent_code, freq_bias_init, freq_std_init, phase_bias_init, phase_std_init)
-        # print(x.shape)
+        print(x.shape)
+        j = 0
+        for index, layer in enumerate(self.shape_network):  
+            x = layer(x, latent_code[j], freq_bias_init, freq_std_init, phase_bias_init, phase_std_init)
+            j += 1
+        
         mask_input = torch.cat([ray_directions, x], axis=-1)
 
         for idx, layer in enumerate(self.texture_network):
-            # start = (index + idx + 1)*self.hidden_dim
-            # end = (index + idx + 2)*self.hidden_dim
-            # x = layer(x, latent_code_freq[..., start:end], latent_code_phase[..., start:end])
-            x = layer(x, latent_code, freq_bias_init, freq_std_init, phase_bias_init, phase_std_init)
-        
+            x = layer(x, latent_code[j], freq_bias_init, freq_std_init, phase_bias_init, phase_std_init)
+            j += 1
+
         feature_input = torch.cat([ray_directions, x], axis=-1)
 
         feature_output = self.feature_layer(feature_input)
@@ -167,8 +180,9 @@ class LocalGeneratorSiren(nn.Module):
         mask_output = self.mask_layer(mask_input)
         color_output = self.color_layer(feature_output)
         sdf_output = self.sdf_layer(x)
-
+      
         return torch.cat([feature_output, color_output, mask_output, sdf_output], axis=-1)
+
 
 
 class GeneratorStackSiren(nn.Module):
@@ -178,7 +192,7 @@ class GeneratorStackSiren(nn.Module):
        parameters calculation: 
         1. mapping: (100*256 + 256) + 2*(256*256 + 256) = 25856 + 131584 = 157440
         2. generator: 12*413064 = 4956768
-        total = 157440 + 4956768 = 
+        total = 157440 + 4956768 = 5114208
     '''
     def __init__(self, z_dim, hidden_dim, latent_dim, semantic_classes, blocks):
         super().__init__()
@@ -193,49 +207,64 @@ class GeneratorStackSiren(nn.Module):
         
         self.generator_list = nn.ModuleList(self.generator_list)
 
+        self.sdf_init_network = LocalGeneratorSiren(hidden_dim, latent_dim, semantic_classes)
+
     def extract_latent(self, input):
         return self.mapping_network(input)
+    
+    
 
-    def shuffle_latent(self, semantic_classes, latent_code_one, latent_code_two):
+    def shuffle_latent(self, semantic_classes, latent_code_one, latent_code_two, shape_depth=3, texture_depth = 2):
         # I am only shuffling full latent code not doing shuffling at texture and shape level
         # N x 256 , N x 256 - 12
+        #output shape is 12 x 5 x N x 256
+        
         shuffled_codes = []
         for i in range(semantic_classes):
             ith_level = []
             for j in range(latent_code_one.shape[0]):
-                sample = torch.randint(0, 2, (1,))[0]
+                sample = torch.randint(0, 3, (1,))[0]
                 if sample == 0:
-                    ith_level.append(latent_code_one[j:j+1,:])
+                    ith_level.append(latent_code_one[j:j+1,:].repeat(shape_depth+texture_depth, 1).unsqueeze(1))
+                elif sample == 2:
+                    ith_level.append(latent_code_two[j:j+1,:].repeat(shape_depth+texture_depth, 1).unsqueeze(1))
                 else:
-                    ith_level.append(latent_code_one[j:j+1,:])
-            ith_level = torch.cat(ith_level, axis=0)
+                    ith_level.append(torch.cat([latent_code_one[j:j+1,:].repeat(shape_depth, 1),
+                        latent_code_two[j:j+1,:].repeat(texture_depth, 1)],axis=0).unsqueeze(1))
+            #5 x N x 256
+            ith_level = torch.cat(ith_level, axis=1)
             ith_level = ith_level.unsqueeze(0)
 
             shuffled_codes.append(ith_level)
         return torch.cat(shuffled_codes, axis=0)
+    
+    def mix_latent_codes(self, z_sample_one, z_sample_two):
+        #output shape 12 x 5 x N x 256
+        latent_code_combined = self.extract_latent(torch.cat([z_sample_one, z_sample_two], axis=0))
+        N = latent_code_combined.shape[0] // 2
+        latent_codes_combined = self.shuffle_latent(self.semantic_classes, latent_code_combined[:N,:], latent_code_combined[N:,:])
+        return latent_codes_combined
 
-    def forward(self, input, ray_directions, z_sample_one, z_sample_two, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25):
+    def sdf_initial_values(self, input, ray_directions, latent_codes_combined, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25):
+
+        return self.sdf_init_network(input, latent_codes_combined[0], ray_directions, freq_bias_init,  freq_std_init, phase_bias_init, phase_std_init)
+
+    def forward(self, input, ray_directions, latent_codes_combined, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25):
+        #Note this is for only training.
         # if sample two is not None then we sample between sample one and sample two latent codes
         # for every generator
         # output would batch size x K x (64x64 x 24) x (128 + 3 + 1 + 1)
-        # this one is for training
-        latent_code_combined = self.mapping_network(torch.cat([z_sample_one, z_sample_two], axis=0))
-        # freq_sample_one, phase_sample_one = self.mapping_network(z_sample_one)
-        # freq_sample_two, phase_sample_two = self.mapping_network(z_sample_two) if z_sample_two is not None else (None, None)
-        N = latent_code_combined.shape[0] // 2
-        latent_codes_combined = self.shuffle_latent(self.semantic_classes, latent_code_combined[:N,:], latent_code_combined[:N,:])
-        #latent_codes_combined ----> K x N x 256
-        #input, latent_codes, ray_directions, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25)
+        
         outputs = []
         for i in range(self.semantic_classes):
-            gen_output = self.generator_list[i](input, latent_codes_combined[i], ray_directions, freq_bias_init,  freq_std_init, phase_bias_init, phase_std_init = 0.25)
+            gen_output = self.generator_list[i](input, latent_codes_combined[i], ray_directions, freq_bias_init,  freq_std_init, phase_bias_init, phase_std_init)
             gen_output = torch.unsqueeze(gen_output, 1)
         
             outputs.append(gen_output)
         
         return torch.cat(outputs, axis=1)
 
-           
+    
 
 
 

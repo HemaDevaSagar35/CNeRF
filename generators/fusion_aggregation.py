@@ -20,24 +20,10 @@ def semantic_fusion(output_generator):
     fused_frgb = fused_frgb.sum(axis=-3)
     return fused_frgb, sdf, mask
 
-def residue_sdf(sdf, sdf_initial, alpha = 1.0):
-    # sdf : N x K x (imgximgx24) x (1)
-    # sdf_initial : N x (imgximgx24) x 1
-    #TODO : For now I am assuming the sphere is of radius 1. Maybe we need to check ano
-    #another like stylesdf to see how sdf is calculated
-    sdf_summed = sdf.sum(axis=-3)
-    sdf_summed = sdf_summed + sdf_initial
-    sdf_summed = -1.0*sdf_summed
-    sdf_summed = sdf_summed / alpha
 
-    #sigma : N x (imgximgx24) x 1
-    sigma = F.sigmoid(sdf_summed)
-    sigma = sigma /alpha
-
-    return sigma
     
 
-def volume_aggregration(fused_frgb, sdf, mask, sdf_initial, z_vals, n, n_steps, img_size, semantic_classes = 12, noise_std=0.5):
+def volume_aggregration(fused_frgb, sigma, mask, z_vals, n, n_steps, img_size, semantic_classes = 12, noise_std=0.5):
     #fused_frgb : N x (imgximgx24) x (128 + 3)
     # sdf : N x K x (imgximgx24) x (1)
     # sdf_initial : N x (imgximgx24) x 1
@@ -52,7 +38,7 @@ def volume_aggregration(fused_frgb, sdf, mask, sdf_initial, z_vals, n, n_steps, 
 
     # re-shape sigma and fused_frgb to N x (img x img) x 24 x (128 + 3)
     fused_frgb = fused_frgb.reshape((n, img_size*img_size, n_steps, fused_frgb.shape[-1]))
-    sigma = sigma.reshape((n, img_size*img_size, n_steps, 1))
+    # sigma = sigma.reshape((n, img_size*img_size, n_steps, 1))
 
     # volume rendering equation
     deltas = z_vals[:, :, 1:] - z_vals[:, :, :-1]
@@ -75,7 +61,7 @@ def volume_aggregration(fused_frgb, sdf, mask, sdf_initial, z_vals, n, n_steps, 
     #mask_final : N x K x (img x img)
  
     mask_final = torch.sum(mask*weights, axis=-1)
-    return frgb_final, mask_final, sigma
+    return frgb_final, mask_final
 
     # test case to see if this is working fine or not
 
@@ -141,9 +127,9 @@ def transform_sampled_points(points, z_vals, ray_directions, device, h_stddev=1,
     homogeneous_origins[:, 3, :] = 1
     transformed_ray_origins = torch.bmm(cam2world_matrix, homogeneous_origins).permute(0, 2, 1).reshape(n, num_rays, 4)[..., :3]
 
-    sdf_intial = sdf_initial_calculate(transformed_points[..., :3], device)
+    # sdf_intial = sdf_initial_calculate(transformed_points[..., :3], device)
 
-    return transformed_points[..., :3], z_vals, transformed_ray_directions, transformed_ray_origins, sdf_initial, pitch, yaw
+    return transformed_points[..., :3], z_vals, transformed_ray_directions, transformed_ray_origins, pitch, yaw
 
 def sdf_initial_calculate(points, device):
     # points : n x num_rays x num_steps x channel

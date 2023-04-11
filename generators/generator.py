@@ -21,10 +21,11 @@ class Generator3d(nn.Module):
     2. We probably need to test it later, after finishing discriminator and starting training loop
        By test I mean, sand some sample inputs and see how it responds and how the sizes are.
     """
-    def __init__(self, generator_stack, z_dim, hidden_dim, semantic_classes, output_dim, blocks = 3, device = None):
+    def __init__(self, generator_stack, z_dim, hidden_dim, latent_dim, semantic_classes, output_dim, blocks = 3, device = None):
         super().__init__()
         self.z_dim = z_dim
         self.hidden_dim = hidden_dim
+        self.latent_dim = latent_dim
         self.semantic_classes = semantic_classes
         self.blocks = blocks
         self.device = device
@@ -33,10 +34,31 @@ class Generator3d(nn.Module):
         self.generator_stack = generator_stack(
             z_dim = self.z_dim, 
             hidden_dim = self.hidden_dim,
+            latent_dim = self.latent_dim,
             semantic_classes = self.semantic_classes,
             blocks = self.blocks)
 
-    def forward(self, z_input_one, z_input_two, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, sample_dist=None, **kwargs):
+        # apparently this could be learnable parameter.
+        self.density_alpha = nn.Parameter(0.1*torch.ones(1))
+    
+    def residue_sdf(self, sdf, sdf_initial):
+        # sdf : N x K x (imgximgx24) x (1)
+        # sdf_initial : N x (imgximgx24) x 1
+        #TODO : For now I am assuming the sphere is of radius 1. Maybe we need to check ano
+        #another like stylesdf to see how sdf is calculated
+        sdf_summed = sdf.sum(axis=-3)
+        sdf_summed = sdf_summed + sdf_initial
+        sdf_summed = -1.0*sdf_summed
+        return torch.sigmoid(sdf_summed / self.density_alpha)/self.density_alpha
+
+        #sigma : N x (imgximgx24) x 1
+        # sigma = F.sigmoid(sdf_summed)
+        # sigma = sigma /alpha
+
+        # return sigma
+
+    def forward(self, z_input_one, z_input_two, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, sample_dist=None, freq_bias_init = 30, 
+                freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25**kwargs):
         
         ## Shapes:
         #### 1) transformed_points : n x rays x num_steps x 3
@@ -47,31 +69,39 @@ class Generator3d(nn.Module):
         #### 6) pitch :  n x 1
         #### 7) yaw : n x 1
 
-        batch_size = z_input.shape[0]
+        n = z_input.shape[0]
+        latent_codes_combined = self.generator_stack.mix_latent_codes(z_input_one, z_input_two)
 
         with torch.no_grad():
             points_cam, z_vals, rays_d_cam =  get_initial_rays_trig(batch_size, num_steps, resolution=(img_size, img_size), device=self.device, fov=fov, ray_start=ray_start, ray_end=ray_end)
-            transformed_points, z_vals, transformed_ray_directions, transformed_ray_origins, sdf_initial, pitch, yaw = transform_sampled_points(points_cam, z_vals, rays_d_cam, h_stddev=h_stddev, v_stddev=v_stddev, h_mean=h_mean, v_mean=v_mean, device=self.device, mode=sample_dist)
+            transformed_points, z_vals, transformed_ray_directions, transformed_ray_origins, pitch, yaw = transform_sampled_points(points_cam, z_vals, rays_d_cam, h_stddev=h_stddev, v_stddev=v_stddev, h_mean=h_mean, v_mean=v_mean, device=self.device, mode=sample_dist)
 
             transformed_ray_directions_expanded = torch.unsqueeze(transformed_ray_directions, -2)
             transformed_ray_directions_expanded = transformed_ray_directions_expanded.expand(-1, -1, num_steps, -1)
             transformed_ray_directions_expanded = transformed_ray_directions_expanded.reshape(batch_size, img_size*img_size*num_steps, 3)
             transformed_points = transformed_points.reshape(batch_size, img_size*img_size*num_steps, 3)
 
-            sdf_initial = sdf_initial.reshape(batch_size, img_size*img_size*n_steps, 1)
+            #batch x (img x img x 24) x 1
+            sdf_initial = self.generator.sdf_initial_values(transformed_points, transformed_ray_directions_expanded, 
+                                latent_codes_combined, freq_bias_init, freq_std_init, phase_bias_init , phase_std_init)
+            
 
         #coarse shape is N x K x (imgximgx24) x (128 + 3 + 1 + 1)
         # TODO: take special care about z_sample shapes
-        coarse_output = self.generator_stack(transformed_points, transformed_ray_directions_expanded, z_sample_one = z_input_one, z_sample_two = z_input_two)
+        coarse_output = self.generator_stack(transformed_points, transformed_ray_directions_expanded, latent_codes_combined, freq_bias_init, 
+                                            freq_std_init, phase_bias_init, phase_std_init)
+        
 
         # doing the semantic fusion and volume integration to get images and all
         #Note: 
         fused_frgb, sdf, mask = fusion_aggregation(coarse_output)
+        sigma = self.residue_sdf(sdf, sdf_initial)
+        sigma = sigma.reshape((n, img_size*img_size, n_steps, 1))
         #SHAPES NOTE:
         #frgb_final : n x (img_size*img_size) x (128 + 3)
         #mask_final : n x K x (img x img)
         # we shall handle the random picking of the semantic region in the training loop function
-        frgb_final, mask_final, sigma = volume_aggregration(fused_frgb, sdf, mask, sdf_initial, z_vals, n, n_steps, img_size, semantic_classes = semantic_classes, noise_std=0.5)
+        frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, n, n_steps, img_size, semantic_classes = semantic_classes, noise_std=0.5)
 
         return frgb_final, torch.cat([pitch, yaw], axis=-1), mask_final
         
@@ -82,6 +112,7 @@ class Generator3d(nn.Module):
         and used forward with freq and phase shifts in from siren, I didn't implement that
         phase shift in siren because I didn't know why we have to do that. I will incorporate if I find
         it useful later experiments.
+        TODO: This should be reconstructed back again, we will do it in the end when the training pipeline is fully fixed.
         """
         ## Shapes:
         #### 1) transformed_points : n x rays x num_steps x 3
@@ -95,7 +126,9 @@ class Generator3d(nn.Module):
         if z_input_two is not None:
             raise("you gave another random sample")
         
-        batch_size = z_input.shape[0]
+        n = z_input.shape[0]
+
+        
 
         with torch.no_grad():
             points_cam, z_vals, rays_d_cam =  get_initial_rays_trig(batch_size, num_steps, resolution=(img_size, img_size), device=self.device, fov=fov, ray_start=ray_start, ray_end=ray_end)
@@ -106,7 +139,8 @@ class Generator3d(nn.Module):
             transformed_ray_directions_expanded = transformed_ray_directions_expanded.reshape(batch_size, img_size*img_size*num_steps, 3)
             transformed_points = transformed_points.reshape(batch_size, img_size*img_size*num_steps, 3)
 
-            sdf_initial = sdf_initial.reshape((batch_size, img_size*img_size*n_steps, 1))
+            sdf_initial = self.generator.sdf_initial_values(transformed_points, transformed_ray_directions_expanded, 
+                                latent_codes_combined, freq_bias_init, freq_std_init, phase_bias_init , phase_std_init)
 
         #coarse shape is N x K x (imgximgx24) x (128 + 3 + 1 + 1)
         # TODO: take special care about z_sample shapes
