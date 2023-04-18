@@ -123,6 +123,8 @@ class GlobalDiscriminator(nn.Module):
     """
     def __init__(self, semantic_classes=12):
         super().__init__()
+        self.epoch = 0
+        self.step = 0
         self.color_layers = nn.Sequential( 
             AdapterBlock(3, 16),
             ResidualCoordConvBlock(16, 32, downsample=True), # 64 x 64 --> 32 x 32
@@ -164,6 +166,8 @@ class SemanticDiscriminator(nn.Module):
     """
     def __init__(self, semantic_classes=12):
         super().__init__()
+        self.epoch = 0
+        self.step = 0
         self.color_layers = nn.Sequential( 
             AdapterBlock(3, 16),
             ResidualCoordConvBlock(16, 32, downsample=True), # 64 x 64 --> 32 x 32

@@ -23,6 +23,8 @@ class Generator3d(nn.Module):
     """
     def __init__(self, generator_stack, z_dim, hidden_dim, latent_dim, semantic_classes, output_dim, blocks = 3, device = None):
         super().__init__()
+        self.epoch = 0
+        self.step = 0
         self.z_dim = z_dim
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
@@ -58,7 +60,7 @@ class Generator3d(nn.Module):
         # return sigma
 
     def forward(self, z_input_one, z_input_two, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, sample_dist=None, freq_bias_init = 30, 
-                freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25**kwargs):
+                freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25, **kwargs):
         
         ## Shapes:
         #### 1) transformed_points : n x rays x num_steps x 3
@@ -69,7 +71,7 @@ class Generator3d(nn.Module):
         #### 6) pitch :  n x 1
         #### 7) yaw : n x 1
 
-        n = z_input.shape[0]
+        batch_size = z_input_one.shape[0]
         latent_codes_combined = self.generator_stack.mix_latent_codes(z_input_one, z_input_two)
 
         with torch.no_grad():
@@ -94,14 +96,14 @@ class Generator3d(nn.Module):
 
         # doing the semantic fusion and volume integration to get images and all
         #Note: 
-        fused_frgb, sdf, mask = fusion_aggregation(coarse_output)
+        fused_frgb, sdf, mask = semantic_fusion(coarse_output)
         sigma = self.residue_sdf(sdf, sdf_initial)
-        sigma = sigma.reshape((n, img_size*img_size, n_steps, 1))
+        sigma = sigma.reshape((batch_size, img_size*img_size, n_steps, 1))
         #SHAPES NOTE:
         #frgb_final : n x (img_size*img_size) x (128 + 3)
         #mask_final : n x K x (img x img)
         # we shall handle the random picking of the semantic region in the training loop function
-        frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, n, n_steps, img_size, semantic_classes = semantic_classes, noise_std=0.5)
+        frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, batch_size, n_steps, img_size, semantic_classes = semantic_classes, noise_std=0.5)
 
         return frgb_final, torch.cat([pitch, yaw], axis=-1), mask_final
         
@@ -126,7 +128,7 @@ class Generator3d(nn.Module):
         if z_input_two is not None:
             raise("you gave another random sample")
         
-        n = z_input.shape[0]
+        batch_size = z_input_one.shape[0]
 
         
 

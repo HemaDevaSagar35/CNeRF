@@ -2,3 +2,4 @@ checkpoints/
 tmp/
 __pycache__/
 TODO.txt
+notes_on_loss.txt
