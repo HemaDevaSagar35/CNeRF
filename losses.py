@@ -18,3 +18,17 @@ def discriminator_loss_r1(r_img_preds, real_imgs, real_labels, scaler):
         grad_mask_penalty = (grad_mask_real.view(grad_mask_real.size(0), -1).norm(2, dim=1) ** 2).mean()
 
     return grad_img_penalty, grad_mask_penalty
+
+def eikonol_surface_loss(grad_sdf, sdf, img_size, n_steps, beta=100):
+    # eikonol_loss = torch.tensor(0, device=grad_sdf.device)
+    # minimal_surface_loss = 
+    if grad_sdf is None:
+        eikonol_loss = torch.tensor(0, device=grad_sdf.device)
+    else:
+        eikonol_loss = ((grad_sdf.norm(dim=-1) - 1)**2).mean()
+    if sdf is None:
+        minimal_surface_loss = torch.tensor(0, device=grad_sdf.device)
+    else:
+        minimal_surface_loss = torch.exp(-1.0*beta*torch.abs(grad_sdf)).mean()
+    
+    return eikonol_loss, minimal_surface_loss

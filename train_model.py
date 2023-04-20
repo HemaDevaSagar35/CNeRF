@@ -121,7 +121,7 @@ def train(rank, world_size, opt):
             hidden_dim = metadata['hidden_dim'],
             latent_dim = metadata['latent_dim'],
             semantic_classes = metadata['semantic_classes'],
-            output_dim = metadata['output_dim'], 
+            output_dim = metadata['output_dim'], scalar = scaler, 
             blocks = metadata['blocks'])
     
 
@@ -240,7 +240,11 @@ def train(rank, world_size, opt):
                 #first generate images for discriminator training
                 with torch.no_grad():
                     z_sample_one = z_sampler((real_imgs.shape[0], metadata['z_dim']), device=device, dist=metadata['z_dist'])
-                    z_sample_two = z_sampler((real_imgs.shape[0], metadata['z_dim']), device=device, dist=metadata['z_dist'])
+                    flip = torch.rand(1).to(device)
+                    if flip[0] <= metadata['mixing_bool']:
+                        z_sample_two = z_sampler((real_imgs.shape[0], metadata['z_dim']), device=device, dist=metadata['z_dist'])
+                    else:
+                        z_sample_two=None
 
                     split_batch_size = z_sample_one.shape[0] // metadata['batch_split']
                     gen_imgs = []
@@ -249,10 +253,10 @@ def train(rank, world_size, opt):
 
                     for split in range(metadata['batch_split']):
                         z_sample_one_subset = z_sample_one[split * split_batch_size:(split+1) * split_batch_size]
-                        z_sample_two_subset = z_sample_two[split * split_batch_size:(split+1) * split_batch_size]
+                        z_sample_two_subset = None if z_sample_two is None else z_sample_two[split * split_batch_size:(split+1) * split_batch_size]
 
                         #TODO: metadata should contain image size too
-                        g_imgs, g_pos, g_mask = generator_ddp(
+                        g_imgs, g_pos, g_mask, _, _ = generator_ddp(
                             z_sample_one_subset,
                             z_sample_two_subset,
                             **metadata)
@@ -278,7 +282,7 @@ def train(rank, world_size, opt):
             #Curriculum
             with torch.cuda.amp.autocast():
                 grad_r1_penalty = 0.5*metadata['r1_img_lambda']*grad_img_penalty + 0.5*metadata['r1_mask_lambda']*grad_mask_penalty
-                g_img_preds, g_img_positions_pred = discriminator_global_ddp(gen_imgs, gen_masks)
+                g_img_preds, g_img_positions_pred = discriminator_global_ddp(gen_imgs[:,-3:], gen_masks)
 
                 g_position_loss = torch.nn.SmoothL1Loss()(g_img_positions_pred, gen_positions) * metadata['pos_lambda']
                 d_global_loss = torch.nn.functional.softplus(g_img_preds).mean() + torch.nn.functional.softplus(-r_img_preds).mean() + \
@@ -297,7 +301,246 @@ def train(rank, world_size, opt):
             scaler.step(optimizer_global_D)
 
             #Train local discriminator
+            #randomely choose which semantic mask to try for
+            semantic_choices = torch.randint(0, metadata['semantic_classes'], (real_imgs.shape[0],)).to(device)
+            gen_mask_choice = torch.zeros((real_imgs.shape[0], 1, real_imgs.shape[2], real_imgs.shape[3])).to(device)
+            real_mask_choice = torch.zeros((real_imgs.shape[0], 1, real_imgs.shape[2], real_imgs.shape[3])).to(device)
+            for j, sem_label in enumerate(semantic_choices):
+                gen_mask_choice[j, 0] = gen_masks[j, sem_label]
+                real_mask_choice[j, 0] = real_labels[j, sem_label]
+
+            with torch.cuda.amp.autocast():
+                r_sem_img_preds, r_sem_mask_preds = discriminator_local_ddp(real_imgs, real_mask_choice)
             
+
+            grad_seg_img_penalty, grad_seg_mask_penalty = discriminator_loss_r1(r_sem_img_preds, real_imgs, real_mask_choice, scaler)
+            with torch.cuda.amp.autocast():
+                grad_r1_seg_penalty = 0.5*grad_seg_img_penalty*metadata['r1_img_lambda'] + 0.5*grad_seg_mask_penalty*metadata['r1_mask_lambda']
+                g_sem_img_preds, g_sem_mask_preds = discriminator_local_ddp(gen_imgs[:,-3:], gen_mask_choice)
+
+                g_sem_cross_entropy = torch.nn.CrossEntropyLoss()(g_sem_mask_preds, semantic_choices)
+                r_sem_cross_entropy = torch.nn.CrossEntropyLoss()(r_sem_mask_preds, semantic_choices)
+
+                d_local_loss = (torch.nn.functional.softplus(-r_sem_img_preds).mean() + \
+                               torch.nn.functional.softplus(g_sem_img_preds).mean() + \
+                               grad_r1_seg_penalty + g_sem_cross_entropy + r_sem_cross_entropy)*metadata['local_d_lambda']
+
+            
+            if rank == 0:
+                logger.add_scalar('d_local_loss', d_local_loss.item(), discriminator_local.step)
+            
+            optimizer_local_D.zero_grad()
+            scaler.scale(d_local_loss).backward()
+            scaler.unscale_(optimizer_local_D)
+            torch.nn.utils.clip_grad_norm_(discriminator_local_ddp.parameters(), metadata['grad_clip'])
+            scaler.step(optimizer_local_D)
+
+            discriminator_losses.append(d_local_loss.item())
+            total_d_loss = d_global_loss.detach().item() + d_local_loss.detach().item()
+            if rank == 0:
+                logger.add_scalar("d_loss (global + local)", total_d_loss, discriminator_local.step)
+            
+
+            #Train the generator
+            z_sample_one = z_sampler((real_imgs.shape[0], metadata['z_dim']), device=device, dist=metadata['z_dist'])
+            flip = torch.rand(1).to(device)
+            if flip[0] <= metadata['mixing_bool']:
+                z_sample_two = z_sampler((real_imgs.shape[0], metadata['z_dim']), device=device, dist=metadata['z_dist'])
+            else:
+                z_sample_two=None
+            
+            for split in range(metadata['batch_split']):
+                with torch.cuda.amp.autocast():
+                    z_sample_one_subset = z_sample_one[split * split_batch_size:(split+1) * split_batch_size]
+                    z_sample_two_subset = None if z_sample_two is None else z_sample_two[split * split_batch_size:(split+1) * split_batch_size]
+                    g_imgs, g_pos, g_mask, g_grad_sdf, g_sdf = generator_ddp(z_sample_one_subset, z_sample_two_subset, **metadata)
+
+                    semantic_choices = torch.randint(0, metadata['semantic_classes'], (z_sample_one_subset.shape[0],)).to(device)
+                    g_mask_choice = torch.zeros((z_sample_one_subset.shape[0], 1, real_imgs.shape[2], real_imgs.shape[3])).to(device)
+                    
+                    for j, sem_label in enumerate(semantic_choices):
+                        g_mask_choice[j, 0] = g_mask[j, sem_label]
+                        
+                    
+                    with torch.no_grad():
+                        g_img_preds, g_img_positions_pred = discriminator_global_ddp(g_imgs[:,-3:], g_mask)
+                        g_sem_img_preds, g_sem_mask_preds = discriminator_local_ddp(g_imgs[:,-3:], g_mask_choice)
+
+                    #view loss
+                    g_position_loss = torch.nn.SmoothL1Loss()(g_img_positions_pred, g_pos) * metadata['pos_lambda']
+                    g_cross_entropy = torch.nn.CrossEntropyLoss()(g_sem_mask_preds, semantic_choices) #cross entropy
+
+                    #eikonol and minimal surface loss
+                    eikonol_loss, minimal_surface_loss = eikonol_surface_loss(g_grad_sdf, g_sdf, metadata['img_size'], metadata['n_steps'], metadata['ms_beta'])
+                    #TODO: where is eikonol loss
+                    total_g_loss = torch.nn.functional.softplus(-g_img_preds).mean() + g_position_loss + metadata['eikonol_lambda']*eikonol_loss + \
+                                   metadata['minimal_surface_lambda']*minimal_surface_loss + (torch.nn.functional.softplus(-g_sem_img_preds).mean() + g_cross_entropy)*metadata['local_d_lambda']
+
+
+                    generator_losses.append(total_g_loss.item())
+
+                scaler.scale(total_g_loss).backward()
+
+            if rank == 0:
+                logger.add_scalar('g_loss', total_g_loss.item(), generator.step)
+
+            scaler.unscale_(optimizer_G)
+            ##Caution: gad clips are not there in original paper, so use it with caution
+            torch.nn.utils.clip_grad_norm_(generator_ddp.parameters(), metadata.get('grad_clip', 0.3))             
+            scaler.step(optimizer_G)
+            scaler.update()
+            optimizer_G.zero_grad()
+            #why there are 2 ema's?
+            ema.update(generator_ddp.parameters())
+            ema2.update(generator_ddp.parameters())
+
+            if rank == 0:
+                interior_step_bar.update(1)
+                if i%10 == 0:
+                    tqdm.write(f"[Experiment: {opt.output_dir}] [Epoch: {discriminator_global.epoch}/{opt.n_epochs}] [D global loss: {d_global_loss.item()}] [D local loss: {d_local_loss.item()}] [G loss: {total_g_loss.item()}] [Step: {discriminator_global.step}] [Img Size: {metadata['img_size']}] [Batch Size: {metadata['batch_size']}] [Scale: {scaler.get_scale()}]")
+                
+                if discriminator_global.step % opt.sample_interval == 0:
+                    generator_ddp.eval()
+                    with torch.no_grad():
+                        with torch.cuda.amp.autocast():
+                            copied_metadata = copy.deepcopy(metadata)
+                            ##TODO: not sure about this change of std deviation
+                            copied_metadata['h_stddev'] = copied_metadata['v_stddev'] = 0
+                            ## TODO: rectify the stage forward method. output should be n x (3 + k) x img_size x img_size
+                            gen_imgs = generator_ddp.module.stage_forward(z_sample_fixed.to(device), **copied_metadata)
+                            gen_labels = mask2color(gen_imgs[:,:-3])
+                    
+
+                    save_image(gen_labels[:25], os.path.join(opt.output_dir, f"{discriminator_global.step}_seg_fixed.png"), nrow=5, normalize=True)
+                    save_image(gen_imgs[:25, -3:], os.path.join(opt.output_dir, f"{discriminator_global.step}_img_fixed.png"), nrow=5, normalize=True)
+                
+                    with torch.no_grad():
+                        with torch.cuda.amp.autocast():
+                            copied_metadata = copy.deepcopy(metadata)
+                            ##TODO: not sure about this change of std deviation
+                            copied_metadata['h_stddev'] = copied_metadata['v_stddev'] = 0
+                            copied_metadata['h_mean'] += 0.5
+                            ## TODO: rectify the stage forward method. output should be n x (3 + k) x img_size x img_size
+                            gen_imgs = generator_ddp.module.stage_forward(z_sample_fixed.to(device), **copied_metadata)
+                            gen_labels = mask2color(gen_imgs[:,:-3])
+                    
+
+                    save_image(gen_labels[:25], os.path.join(opt.output_dir, f"{discriminator_global.step}_seg_tilted.png"), nrow=5, normalize=True)
+                    save_image(gen_imgs[:25, -3:], os.path.join(opt.output_dir, f"{discriminator_global.step}_img_tilted.png"), nrow=5, normalize=True)
+
+                    ema.store(generator_ddp.parameters())
+                    ema.copy_to(generator_ddp.parameters())
+                    generator_ddp.eval()
+
+                    with torch.no_grad():
+                        with torch.cuda.amp.autocast():
+                            copied_metadata = copy.deepcopy(metadata)
+                            ##TODO: not sure about this change of std deviation
+                            copied_metadata['h_stddev'] = copied_metadata['v_stddev'] = 0
+                            ## TODO: rectify the stage forward method. output should be n x (3 + k) x img_size x img_size
+                            gen_imgs = generator_ddp.module.stage_forward(z_sample_fixed.to(device), **copied_metadata)
+                            gen_labels = mask2color(gen_imgs[:,:-3])
+                    
+
+                    save_image(gen_labels[:25], os.path.join(opt.output_dir, f"{discriminator_global.step}_seg_fixed_ema.png"), nrow=5, normalize=True)
+                    save_image(gen_imgs[:25, -3:], os.path.join(opt.output_dir, f"{discriminator_global.step}_img_fixed_ema.png"), nrow=5, normalize=True)
+                
+                    with torch.no_grad():
+                        with torch.cuda.amp.autocast():
+                            copied_metadata = copy.deepcopy(metadata)
+                            ##TODO: not sure about this change of std deviation
+                            copied_metadata['h_stddev'] = copied_metadata['v_stddev'] = 0
+                            copied_metadata['h_mean'] += 0.5
+                            ## TODO: rectify the stage forward method. output should be n x (3 + k) x img_size x img_size
+                            gen_imgs = generator_ddp.module.stage_forward(z_sample_fixed.to(device), **copied_metadata)
+                            gen_labels = mask2color(gen_imgs[:,:-3])
+                    
+
+                    save_image(gen_labels[:25], os.path.join(opt.output_dir, f"{discriminator_global.step}_seg_tilted_ema.png"), nrow=5, normalize=True)
+                    save_image(gen_imgs[:25, -3:], os.path.join(opt.output_dir, f"{discriminator_global.step}_img_tilted_ema.png"), nrow=5, normalize=True)
+
+                    with torch.no_grad():
+                        with torch.cuda.amp.autocast():
+                            copied_metadata = copy.deepcopy(metadata)
+                            ##TODO: not sure about this change of std deviation
+                            copied_metadata['h_stddev'] = copied_metadata['v_stddev'] = 0
+                            ##TODO: need to edit this too
+                            copied_metadata['psi'] = 0.7
+                            ## TODO: rectify the stage forward method. output should be n x (3 + k) x img_size x img_size
+                            gen_imgs = generator_ddp.module.stage_forward(torch.randn_like(z_sample_fixed).to(device), **copied_metadata)
+                            gen_labels = mask2color(gen_imgs[:,:-3])
+                    
+                    save_image(gen_labels[:25], os.path.join(opt.output_dir, f"{discriminator_global.step}_seg_random.png"), nrow=5, normalize=True)
+                    save_image(gen_imgs[:25, -3:], os.path.join(opt.output_dir, f"{discriminator_global.step}_img_random.png"), nrow=5, normalize=True)
+
+                    ema.restore(generator_ddp.parameters())
+
+                if discriminator_global.step % opt.sample_interval == 0:
+                    torch.save(ema, os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema.pth'))
+                    torch.save(ema2, os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema2.pth'))
+                    torch.save(generator_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_generator.pth'))
+                    torch.save(discriminator_global_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_discriminator_global.pth'))
+                    torch.save(discriminator_local_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_discriminator_local.pth'))
+                    torch.save(optimizer_G.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_optimizer_G.pth'))
+                    torch.save(optimizer_global_D.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_optimizer_global_D.pth'))
+                    torch.save(optimizer_local_D.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_optimizer_local_D.pth'))
+                    torch.save(scaler.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_scaler.pth'))
+                    torch.save(generator_losses, os.path.join(opt.output_dir, 'generator.losses'))
+                    torch.save(discriminator_losses, os.path.join(opt.output_dir, 'discriminator.losses'))
+
+            if opt.eval_freq > 0 and (discriminator_global.step + 1)%opt.eval_freq == 0:
+                generated_dir = os.path.join(opt.output_dir, 'evaluation/generated')
+
+                if rank == 0:
+                    ##TODO: we need to copy this fid evaluation
+                    fid_evaluation.setup_evaluation(metadata['dataset'], generated_dir, **metadata)
+                dist.barrier()
+                ema.store(generator_ddp.parameters())
+                ema.copy_to(generator_ddp.parameters())
+                generator_ddp.eval()
+                fid_evaluation.output_images_double(generator_ddp, metadata, rank, world_size, generated_dir)
+                ema.restore(generator_ddp.parameters())
+                dist.barrier()
+
+                if rank == 0:
+                    fid = fid_evaluation.calculate_fid(metadata['dataset'], generated_dir, **metadata)
+                    with open(os.path.join(opt.output_dir, f'fid.txt'), 'a') as f:
+                        f.write(f'\n{discriminator_global.step}:{fid}')
+                    logger.add_scalar('fid', fid, discriminator_global.step)
+
+                torch.cuda.empty_cache()
+
+            discriminator_global.step += 1
+            discriminator_local.step += 1
+            generator_all.step += 1
+
+        discriminator_global.epoch += 1
+        discriminator_local.epoch += 1
+        generator_all.epoch += 1
+
+    cleanup()
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--n_epochs", type=int, default=3000, help="number of epochs of training")
+    parser.add_argument("--sample_interval", type=int, default=2000, help="interval between image sampling")
+    parser.add_argument('--output_dir', type=str, default='debug')
+    parser.add_argument('--load_dir', type=str, default='')
+    parser.add_argument('--load_step', type=int, default=0)
+    parser.add_argument('--curriculum', type=str, required=True)
+    parser.add_argument('--eval_freq', type=int, default=5000)
+    parser.add_argument('--port', type=str, default='12355')
+    parser.add_argument('--set_step', type=int, default=None)
+    parser.add_argument('--model_save_interval', type=int, default=5000)
+    parser.add_argument('--num_gpus', type=int, default=1)
+    
+    opt = parser.parse_args()
+    print(opt)
+    os.makedirs(opt.output_dir, exist_ok=True)
+    num_gpus = opt.num_gpus
+    mp.spawn(train, args=(num_gpus, opt), nprocs=num_gpus, join=True)   
+
+
 
             
             

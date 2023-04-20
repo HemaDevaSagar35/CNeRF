@@ -126,22 +126,22 @@ class GlobalDiscriminator(nn.Module):
         self.epoch = 0
         self.step = 0
         self.color_layers = nn.Sequential( 
-            AdapterBlock(3, 16),
-            ResidualCoordConvBlock(16, 32, downsample=True), # 64 x 64 --> 32 x 32
-            ResidualCoordConvBlock(32, 64, downsample=True), # 32 x 32 ---> 16 x 16
-            ResidualCoordConvBlock(64, 128, downsample=True), # 16 x 16 ---> 8 x 8
-            ResidualCoordConvBlock(128, 256, downsample=True), # 8 x 8 ---> 4 x 4
-            ResidualCoordConvBlock(256, 400, downsample=True), # 4 x 4 ---> 2 x 2
+            AdapterBlock(3, 128),
+            ResidualCoordConvBlock(128, 256, downsample=True), # 64 x 64 --> 32 x 32
+            ResidualCoordConvBlock(256, 400, downsample=True), # 32 x 32 ---> 16 x 16
+            ResidualCoordConvBlock(256, 400, downsample=True), # 16 x 16 ---> 8 x 8
+            ResidualCoordConvBlock(400, 400, downsample=True), # 8 x 8 ---> 4 x 4
+            ResidualCoordConvBlock(400, 400, downsample=True), # 4 x 4 ---> 2 x 2
         
         )
 
         self.mask_layers = nn.Sequential( 
-            AdapterBlock(semantic_classes, 16),
-            ResidualCoordConvBlock(16, 32, downsample=True), # 64 x 64 --> 32 x 32
-            ResidualCoordConvBlock(32, 64, downsample=True), # 32 x 32 ---> 16 x 16
-            ResidualCoordConvBlock(64, 128, downsample=True), # 16 x 16 ---> 8 x 8
-            ResidualCoordConvBlock(128, 256, downsample=True), # 8 x 8 ---> 4 x 4
-            ResidualCoordConvBlock(256, 400, downsample=True), # 4 x 4 ---> 2 x 2
+            AdapterBlock(semantic_classes, 128),
+            ResidualCoordConvBlock(128, 256, downsample=True), # 64 x 64 --> 32 x 32
+            ResidualCoordConvBlock(256, 400, downsample=True), # 32 x 32 ---> 16 x 16
+            ResidualCoordConvBlock(400, 400, downsample=True), # 16 x 16 ---> 8 x 8
+            ResidualCoordConvBlock(400, 400, downsample=True), # 8 x 8 ---> 4 x 4
+            ResidualCoordConvBlock(400, 400, downsample=True), # 4 x 4 ---> 2 x 2
         
         )
 
@@ -169,12 +169,12 @@ class SemanticDiscriminator(nn.Module):
         self.epoch = 0
         self.step = 0
         self.color_layers = nn.Sequential( 
-            AdapterBlock(3, 16),
-            ResidualCoordConvBlock(16, 32, downsample=True), # 64 x 64 --> 32 x 32
-            ResidualCoordConvBlock(32, 64, downsample=True), # 32 x 32 ---> 16 x 16
-            ResidualCoordConvBlock(64, 128, downsample=True), # 16 x 16 ---> 8 x 8
-            ResidualCoordConvBlock(128, 256, downsample=True), # 8 x 8 ---> 4 x 4
-            ResidualCoordConvBlock(256, 400, downsample=True), # 4 x 4 ---> 2 x 2
+            AdapterBlock(3, 128),
+            ResidualCoordConvBlock(128, 256, downsample=True), # 64 x 64 --> 32 x 32
+            ResidualCoordConvBlock(256, 400, downsample=True), # 32 x 32 ---> 16 x 16
+            ResidualCoordConvBlock(400, 400, downsample=True), # 16 x 16 ---> 8 x 8
+            ResidualCoordConvBlock(400, 400, downsample=True), # 8 x 8 ---> 4 x 4
+            ResidualCoordConvBlock(400, 400, downsample=True), # 4 x 4 ---> 2 x 2
         
         )
 
@@ -183,8 +183,9 @@ class SemanticDiscriminator(nn.Module):
         self.fc_label = nn.Linear(256, 1)
         self.mask_label = nn.Linear(256, semantic_classes)
     
-    def forward(self, input):
-        x = self.color_layers(input)
+    def forward(self, input, mask):
+        x = input * mask
+        x = self.color_layers(x)
         x = self.final_layer(x)
 
         x = torch.flatten(x, 1)

@@ -21,7 +21,7 @@ class Generator3d(nn.Module):
     2. We probably need to test it later, after finishing discriminator and starting training loop
        By test I mean, sand some sample inputs and see how it responds and how the sizes are.
     """
-    def __init__(self, generator_stack, z_dim, hidden_dim, latent_dim, semantic_classes, output_dim, blocks = 3, device = None):
+    def __init__(self, generator_stack, z_dim, hidden_dim, latent_dim, semantic_classes, output_dim, scalar, blocks = 3, device = None):
         super().__init__()
         self.epoch = 0
         self.step = 0
@@ -32,6 +32,7 @@ class Generator3d(nn.Module):
         self.blocks = blocks
         self.device = device
         self.output_dim = output_dim # 128 + 3 + 1 + 1 (useful during inference)
+        self.scalar = scalar
 
         self.generator_stack = generator_stack(
             z_dim = self.z_dim, 
@@ -50,14 +51,24 @@ class Generator3d(nn.Module):
         #another like stylesdf to see how sdf is calculated
         sdf_summed = sdf.sum(axis=-3)
         sdf_summed = sdf_summed + sdf_initial
-        sdf_summed = -1.0*sdf_summed
-        return torch.sigmoid(sdf_summed / self.density_alpha)/self.density_alpha
+        # sdf_summed = -1.0*sdf_summed
+        return torch.sigmoid(-1.0*sdf_summed / self.density_alpha)/self.density_alpha, sdf_summed
 
         #sigma : N x (imgximgx24) x 1
         # sigma = F.sigmoid(sdf_summed)
         # sigma = sigma /alpha
 
         # return sigma
+    
+    def get_grad_sdf(self, absolute_sdf, points):
+        #absolute : N x(img x img x 24)x1
+        with torch.cuda.amp.autocast():
+            grad_sdf = torch.autograd.grad(outputs=self.scalar.scale(absolute_sdf), inputs=points,
+                                grad_outputs=torch.ones_like(sdf),
+                                create_graph=True)[0]
+            
+            grad_sdf = grad_sdf * 1./(self.scalar.get_scale())
+        return grad_sdf
 
     def forward(self, z_input_one, z_input_two, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, sample_dist=None, freq_bias_init = 30, 
                 freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25, **kwargs):
@@ -97,15 +108,18 @@ class Generator3d(nn.Module):
         # doing the semantic fusion and volume integration to get images and all
         #Note: 
         fused_frgb, sdf, mask = semantic_fusion(coarse_output)
-        sigma = self.residue_sdf(sdf, sdf_initial)
+        #adsolute sdf N x (img*img*24) x 1
+        sigma, absolute_sdf = self.residue_sdf(sdf, sdf_initial)
         sigma = sigma.reshape((batch_size, img_size*img_size, n_steps, 1))
+
+        grad_sdf = self.get_grad_sdf(absolute_sdf, transformed_points)
         #SHAPES NOTE:
-        #frgb_final : n x (img_size*img_size) x (128 + 3)
-        #mask_final : n x K x (img x img)
+        #frgb_final : n x (img_size) x (img_size) x (128 + 3)
+        #mask_final : n x K x (img) x (img)
         # we shall handle the random picking of the semantic region in the training loop function
         frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, batch_size, n_steps, img_size, semantic_classes = semantic_classes, noise_std=0.5)
 
-        return frgb_final, torch.cat([pitch, yaw], axis=-1), mask_final
+        return frgb_final, torch.cat([pitch, yaw], axis=-1), mask_final, grad_sdf, absolute_sdf
         
 
     def stage_forward(self, z_input_one, z_input_two, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, sample_dist=None, max_batch = 5, **kwargs):

@@ -59,10 +59,10 @@ def volume_aggregration(fused_frgb, sigma, mask, z_vals, n, n_steps, img_size, s
     
     weights = (weights[...,-1]).unsqueeze(-3).repeat(1, semantic_classes, 1, 1)
     mask = mask[...,-1].reshape((n, semantic_classes, img_size*img_size, n_steps))
-    #mask_final : N x K x (img x img)
+    #mask_final : N x K x img x img
  
     mask_final = torch.sum(mask*weights, axis=-1)
-    return frgb_final, mask_final
+    return frgb_final.transpose(2, 1).reshape((n, -1, img_size, img_size)), mask_final.reshape((n, semantic_classes, img_size, img_size))
 
     # test case to see if this is working fine or not
 

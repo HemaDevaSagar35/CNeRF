@@ -240,7 +240,10 @@ class GeneratorStackSiren(nn.Module):
     
     def mix_latent_codes(self, z_sample_one, z_sample_two):
         #output shape 12 x 5 x N x 256
-        latent_code_combined = self.extract_latent(torch.cat([z_sample_one, z_sample_two], axis=0))
+        if z_sample_two is None:
+            latent_code_combined = self.extract_latent(torch.cat([z_sample_one, z_sample_one], axis=0))
+        else:
+            latent_code_combined = self.extract_latent(torch.cat([z_sample_one, z_sample_two], axis=0))
         N = latent_code_combined.shape[0] // 2
         latent_codes_combined = self.shuffle_latent(self.semantic_classes, latent_code_combined[:N,:], latent_code_combined[N:,:])
         return latent_codes_combined
