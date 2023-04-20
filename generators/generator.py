@@ -114,7 +114,7 @@ class Generator3d(nn.Module):
 
         grad_sdf = self.get_grad_sdf(absolute_sdf, transformed_points)
         #SHAPES NOTE:
-        #frgb_final : n x (img_size) x (img_size) x (128 + 3)
+        #frgb_final : n x ) x (128 + 3) x img_size x img_size
         #mask_final : n x K x (img) x (img)
         # we shall handle the random picking of the semantic region in the training loop function
         frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, batch_size, n_steps, img_size, semantic_classes = semantic_classes, noise_std=0.5)
@@ -122,7 +122,8 @@ class Generator3d(nn.Module):
         return frgb_final, torch.cat([pitch, yaw], axis=-1), mask_final, grad_sdf, absolute_sdf
         
 
-    def stage_forward(self, z_input_one, z_input_two, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, sample_dist=None, max_batch = 5, **kwargs):
+    def stage_forward(self, z_input_one, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, sample_dist=None, max_batch = 5, freq_bias_init = 30, 
+                      freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25, **kwargs):
         """Use this while inferencing.
         TODO: FNeRF, did some extra while inferencing, he took average of multiple freq and phase latent codes
         and used forward with freq and phase shifts in from siren, I didn't implement that
@@ -138,13 +139,12 @@ class Generator3d(nn.Module):
         #### 5) sdf_initial : n x rays x num_steps x 1 =>  n x (rays x num_steps) x 1 
         #### 6) pitch :  n x 1
         #### 7) yaw : n x 1
+        #### 8) latent codes: 12 x 5 x N x 256
 
-        if z_input_two is not None:
-            raise("you gave another random sample")
-        
         batch_size = z_input_one.shape[0]
+        latent_codes = self.generator_stack.extract_latent(z_input_one)
+        latent_codes = latent_codes.unsqueeze(0).repeat(5, 1, 1).unsqueeze(0).repeat(self.semantic_classes, 1, 1, 1) # 5 is hard coded here cause there are 5 layers in the local generator
 
-        
 
         with torch.no_grad():
             points_cam, z_vals, rays_d_cam =  get_initial_rays_trig(batch_size, num_steps, resolution=(img_size, img_size), device=self.device, fov=fov, ray_start=ray_start, ray_end=ray_end)
@@ -156,45 +156,53 @@ class Generator3d(nn.Module):
             transformed_points = transformed_points.reshape(batch_size, img_size*img_size*num_steps, 3)
 
             sdf_initial = self.generator.sdf_initial_values(transformed_points, transformed_ray_directions_expanded, 
-                                latent_codes_combined, freq_bias_init, freq_std_init, phase_bias_init , phase_std_init)
+                                latent_codes, freq_bias_init, freq_std_init, phase_bias_init , phase_std_init)
 
-        #coarse shape is N x K x (imgximgx24) x (128 + 3 + 1 + 1)
-        # TODO: take special care about z_sample shapes
+            #coarse shape is N x K x (imgximgx24) x (128 + 3 + 1 + 1)
+            # TODO: take special care about z_sample shapes
 
-        coarse_output = torch.zeros((batch_size, self.semantic_classes, img_size*img_size*num_steps, self.output_dim), device=self.device)
-        quo = batch_size // max_batch
-        rem = min(1, batch_size % max_batch)
-        # TODO : we might face some issues for the loop below, haven't tested it yet. Need to do it
-        # later after finishing discriminator
+            # coarse_output = self.generator_stack(transformed_points, transformed_ray_directions_expanded, latent_codes, freq_bias_init, 
+            #                                     freq_std_init, phase_bias_init, phase_std_init)
 
-
-        for b in range(quo + rem):
-            head = b*max_batch
-            tail = (b+1)*max_batch
-
-            coarse_output[head:tail,...] = self.generator_stack(
-                transformed_points[head:tail,...], 
-                transformed_ray_directions_expanded[head:tail,...], 
-                z_sample_one = z_input_one[head:tail,...], 
-                z_sample_two = None)
+            coarse_output = torch.zeros((batch_size, self.semantic_classes, img_size*img_size*num_steps, self.hidden_dim + 5))
             
-            # head += max_batch_size
+            quo = batch_size // max_batch
+            rem = min(1, batch_size % max_batch)
+            # TODO : we might face some issues for the loop below, haven't tested it yet. Need to do it
+            # later after finishing discriminator
 
-        # doing the semantic fusion and volume integration to get images and all
-        #Note: 
-        fused_frgb, sdf, mask = fusion_aggregation(coarse_output)
-        #SHAPES NOTE:
-        #frgb_final : n x (img_size*img_size) x (128 + 3)
-        #mask_final : n x K x (img x img)
-        # we shall handle the random picking of the semantic region in the training loop function
-        frgb_final, mask_final, sigma = volume_aggregration(fused_frgb, sdf, mask, sdf_initial, z_vals, n, n_steps, img_size, semantic_classes = semantic_classes, noise_std=0.5)
 
-        pixels = frgb_final[...,-3:]
-        pixels = pixels.reshape((batch_size, img_size, img_size, -1))
+            for b in range(quo + rem):
+                head = b*max_batch
+                tail = (b+1)*max_batch
 
-        mask_final = torch.nn.Softmax(dim=1)(mask_final)
+                coarse_output[head:tail,...] = self.generator_stack(
+                    transformed_points[head:tail,...], 
+                    transformed_ray_directions_expanded[head:tail,...],
+                    latent_codes[:,:,head:tail,:],
+                    freq_bias_init,
+                    freq_std_init,
+                    phase_bias_init,
+                    phase_std_init)
+                
+                # head += max_batch_size
 
-        return pixels, mask_final, sigma
+            # doing the semantic fusion and volume integration to get images and all
+            #Note: 
+            fused_frgb, sdf, mask = semantic_fusion(coarse_output)
+            #SHAPES NOTE:
+            
+
+             #adsolute sdf N x (img*img*24) x 1
+            sigma, absolute_sdf = self.residue_sdf(sdf, sdf_initial)
+            sigma = sigma.reshape((batch_size, img_size*img_size, n_steps, 1))
+            #frgb_final : n x ) x (128 + 3) x img_size x img_size
+            #mask_final : n x K x (img) x (img)
+
+            frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, batch_size, n_steps, img_size, semantic_classes = semantic_classes, noise_std=0.5)
+
+
+        return frgb_final, mask_final, sigma
 
 
 

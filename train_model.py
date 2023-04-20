@@ -407,8 +407,8 @@ def train(rank, world_size, opt):
                             ##TODO: not sure about this change of std deviation
                             copied_metadata['h_stddev'] = copied_metadata['v_stddev'] = 0
                             ## TODO: rectify the stage forward method. output should be n x (3 + k) x img_size x img_size
-                            gen_imgs = generator_ddp.module.stage_forward(z_sample_fixed.to(device), **copied_metadata)
-                            gen_labels = mask2color(gen_imgs[:,:-3])
+                            gen_imgs, gen_masks_out, gen_sigma = generator_ddp.module.stage_forward(z_sample_fixed.to(device), **copied_metadata)
+                            gen_labels = mask2color(gen_masks_out)
                     
 
                     save_image(gen_labels[:25], os.path.join(opt.output_dir, f"{discriminator_global.step}_seg_fixed.png"), nrow=5, normalize=True)
@@ -421,8 +421,8 @@ def train(rank, world_size, opt):
                             copied_metadata['h_stddev'] = copied_metadata['v_stddev'] = 0
                             copied_metadata['h_mean'] += 0.5
                             ## TODO: rectify the stage forward method. output should be n x (3 + k) x img_size x img_size
-                            gen_imgs = generator_ddp.module.stage_forward(z_sample_fixed.to(device), **copied_metadata)
-                            gen_labels = mask2color(gen_imgs[:,:-3])
+                            gen_imgs, gen_masks_out, gen_sigma = generator_ddp.module.stage_forward(z_sample_fixed.to(device), **copied_metadata)
+                            gen_labels = mask2color(gen_masks_out)
                     
 
                     save_image(gen_labels[:25], os.path.join(opt.output_dir, f"{discriminator_global.step}_seg_tilted.png"), nrow=5, normalize=True)
@@ -438,8 +438,8 @@ def train(rank, world_size, opt):
                             ##TODO: not sure about this change of std deviation
                             copied_metadata['h_stddev'] = copied_metadata['v_stddev'] = 0
                             ## TODO: rectify the stage forward method. output should be n x (3 + k) x img_size x img_size
-                            gen_imgs = generator_ddp.module.stage_forward(z_sample_fixed.to(device), **copied_metadata)
-                            gen_labels = mask2color(gen_imgs[:,:-3])
+                            gen_imgs, gen_masks_out, gen_sigma = generator_ddp.module.stage_forward(z_sample_fixed.to(device), **copied_metadata)
+                            gen_labels = mask2color(gen_masks_out)
                     
 
                     save_image(gen_labels[:25], os.path.join(opt.output_dir, f"{discriminator_global.step}_seg_fixed_ema.png"), nrow=5, normalize=True)
@@ -452,8 +452,8 @@ def train(rank, world_size, opt):
                             copied_metadata['h_stddev'] = copied_metadata['v_stddev'] = 0
                             copied_metadata['h_mean'] += 0.5
                             ## TODO: rectify the stage forward method. output should be n x (3 + k) x img_size x img_size
-                            gen_imgs = generator_ddp.module.stage_forward(z_sample_fixed.to(device), **copied_metadata)
-                            gen_labels = mask2color(gen_imgs[:,:-3])
+                            gen_imgs, gen_masks_out, gen_sigma = generator_ddp.module.stage_forward(z_sample_fixed.to(device), **copied_metadata)
+                            gen_labels = mask2color(gen_sigma)
                     
 
                     save_image(gen_labels[:25], os.path.join(opt.output_dir, f"{discriminator_global.step}_seg_tilted_ema.png"), nrow=5, normalize=True)
@@ -467,8 +467,8 @@ def train(rank, world_size, opt):
                             ##TODO: need to edit this too
                             copied_metadata['psi'] = 0.7
                             ## TODO: rectify the stage forward method. output should be n x (3 + k) x img_size x img_size
-                            gen_imgs = generator_ddp.module.stage_forward(torch.randn_like(z_sample_fixed).to(device), **copied_metadata)
-                            gen_labels = mask2color(gen_imgs[:,:-3])
+                            gen_imgs, gen_masks_out, gen_sigma = generator_ddp.module.stage_forward(torch.randn_like(z_sample_fixed).to(device), **copied_metadata)
+                            gen_labels = mask2color(gen_masks_out)
                     
                     save_image(gen_labels[:25], os.path.join(opt.output_dir, f"{discriminator_global.step}_seg_random.png"), nrow=5, normalize=True)
                     save_image(gen_imgs[:25, -3:], os.path.join(opt.output_dir, f"{discriminator_global.step}_img_random.png"), nrow=5, normalize=True)
