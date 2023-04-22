@@ -170,22 +170,34 @@ class SemanticDiscriminator(nn.Module):
         self.step = 0
         self.color_layers = nn.Sequential( 
             AdapterBlock(3, 128),
-            ResidualCoordConvBlock(128, 256, downsample=True), # 64 x 64 --> 32 x 32
-            ResidualCoordConvBlock(256, 400, downsample=True), # 32 x 32 ---> 16 x 16
-            ResidualCoordConvBlock(400, 400, downsample=True), # 16 x 16 ---> 8 x 8
-            ResidualCoordConvBlock(400, 400, downsample=True), # 8 x 8 ---> 4 x 4
-            ResidualCoordConvBlock(400, 400, downsample=True), # 4 x 4 ---> 2 x 2
+            ResidualCoordConvBlock(256, 512, downsample=True), # 64 x 64 --> 32 x 32
+            ResidualCoordConvBlock(512, 512, downsample=True), # 32 x 32 ---> 16 x 16
+            ResidualCoordConvBlock(512, 512, downsample=True), # 16 x 16 ---> 8 x 8
+            ResidualCoordConvBlock(512, 512, downsample=True), # 8 x 8 ---> 4 x 4
+            ResidualCoordConvBlock(512, 512, downsample=True), # 4 x 4 ---> 2 x 2
         
         )
 
-        self.final_layer = nn.Conv2d(400, 256, 2)
+        self.seg_layers = nn.Sequential( 
+            AdapterBlock(3, 128),
+            ResidualCoordConvBlock(256, 512, downsample=True), # 64 x 64 --> 32 x 32
+            ResidualCoordConvBlock(512, 512, downsample=True), # 32 x 32 ---> 16 x 16
+            ResidualCoordConvBlock(512, 512, downsample=True), # 16 x 16 ---> 8 x 8
+            ResidualCoordConvBlock(512, 512, downsample=True), # 8 x 8 ---> 4 x 4
+            ResidualCoordConvBlock(512, 512, downsample=True), # 4 x 4 ---> 2 x 2
+        
+        )
 
-        self.fc_label = nn.Linear(256, 1)
-        self.mask_label = nn.Linear(256, semantic_classes)
+        self.final_layer = nn.Conv2d(512, 512, 2)
+
+        self.fc_label = nn.Linear(512, 1)
+        self.mask_label = nn.Linear(512, semantic_classes)
     
     def forward(self, input, mask):
         x = input * mask
-        x = self.color_layers(x)
+        x = self.color_layers(x) + self.seg_layers(mask)
+
+        # x = self.color_layers(x)
         x = self.final_layer(x)
 
         x = torch.flatten(x, 1)

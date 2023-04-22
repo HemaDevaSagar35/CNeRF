@@ -19,7 +19,7 @@ def discriminator_loss_r1(r_img_preds, real_imgs, real_labels, scaler):
 
     return grad_img_penalty, grad_mask_penalty
 
-def eikonol_surface_loss(grad_sdf, sdf, img_size, n_steps, beta=100):
+def eikonol_surface_loss(grad_sdf, sdf, beta=100):
     # eikonol_loss = torch.tensor(0, device=grad_sdf.device)
     # minimal_surface_loss = 
     if grad_sdf is None:

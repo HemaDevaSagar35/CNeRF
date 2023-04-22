@@ -95,7 +95,7 @@ def train(rank, world_size, opt):
     z_sample_fixed = z_sampler((25, metadata['z_dim']), device='cpu', dist=metadata['z_dist'])
     CHANNELS = 3
     #curriculum dict
-    CHANNELS_SEG = curriculum.get('channel_seg', 18)
+    # CHANNELS_SEG = curriculum.get('channel_seg', 12)
 
     scaler = torch.cuda.amp.GradScaler()
 
@@ -122,16 +122,16 @@ def train(rank, world_size, opt):
             latent_dim = metadata['latent_dim'],
             semantic_classes = metadata['semantic_classes'],
             output_dim = metadata['output_dim'], scalar = scaler, 
-            blocks = metadata['blocks'])
+            blocks = metadata['blocks']).to(device)
     
 
         discriminator_global = discriminator.GlobalDiscriminator(
             metadata['semantic_classes']
-        )
+        ).to(device)
 
         discriminator_local = discriminator.SemanticDiscriminator(
             metadata['semantic_classes']
-        )
+        ).to(device)
 
         ema = ExponentialMovingAverage(generator.parameters(), decay=0.999)
         ema2 = ExponentialMovingAverage(generator.parameters(), decay=0.9999)
@@ -371,7 +371,7 @@ def train(rank, world_size, opt):
                     g_cross_entropy = torch.nn.CrossEntropyLoss()(g_sem_mask_preds, semantic_choices) #cross entropy
 
                     #eikonol and minimal surface loss
-                    eikonol_loss, minimal_surface_loss = eikonol_surface_loss(g_grad_sdf, g_sdf, metadata['img_size'], metadata['n_steps'], metadata['ms_beta'])
+                    eikonol_loss, minimal_surface_loss = eikonol_surface_loss(g_grad_sdf, g_sdf, metadata['ms_beta'])
                     #TODO: where is eikonol loss
                     total_g_loss = torch.nn.functional.softplus(-g_img_preds).mean() + g_position_loss + metadata['eikonol_lambda']*eikonol_loss + \
                                    metadata['minimal_surface_lambda']*minimal_surface_loss + (torch.nn.functional.softplus(-g_sem_img_preds).mean() + g_cross_entropy)*metadata['local_d_lambda']
@@ -465,7 +465,7 @@ def train(rank, world_size, opt):
                             ##TODO: not sure about this change of std deviation
                             copied_metadata['h_stddev'] = copied_metadata['v_stddev'] = 0
                             ##TODO: need to edit this too
-                            copied_metadata['psi'] = 0.7
+                            # copied_metadata['psi'] = 0.7
                             ## TODO: rectify the stage forward method. output should be n x (3 + k) x img_size x img_size
                             gen_imgs, gen_masks_out, gen_sigma = generator_ddp.module.stage_forward(torch.randn_like(z_sample_fixed).to(device), **copied_metadata)
                             gen_labels = mask2color(gen_masks_out)
