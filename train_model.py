@@ -282,9 +282,9 @@ def train(rank, world_size, opt):
             #Curriculum
             with torch.cuda.amp.autocast():
                 grad_r1_penalty = 0.5*metadata['r1_img_lambda']*grad_img_penalty + 0.5*metadata['r1_mask_lambda']*grad_mask_penalty
-                g_img_preds, g_img_positions_pred = discriminator_global_ddp(gen_imgs[:,-3:], gen_masks)
+                g_img_preds, g_img_positions_pred = discriminator_global_ddp(gen_imgs.detach()[:,-3:], gen_masks.detach())
 
-                g_position_loss = torch.nn.SmoothL1Loss()(g_img_positions_pred, gen_positions) * metadata['pos_lambda']
+                g_position_loss = torch.nn.SmoothL1Loss()(g_img_positions_pred, gen_positions.detach()) * metadata['pos_lambda']
                 d_global_loss = torch.nn.functional.softplus(g_img_preds).mean() + torch.nn.functional.softplus(-r_img_preds).mean() + \
                     grad_r1_penalty + g_position_loss
                 
@@ -312,11 +312,11 @@ def train(rank, world_size, opt):
             with torch.cuda.amp.autocast():
                 r_sem_img_preds, r_sem_mask_preds = discriminator_local_ddp(real_imgs, real_mask_choice)
             
-
+            real_mask_choice.requires_grad = True
             grad_seg_img_penalty, grad_seg_mask_penalty = discriminator_loss_r1(r_sem_img_preds, real_imgs, real_mask_choice, scaler)
             with torch.cuda.amp.autocast():
                 grad_r1_seg_penalty = 0.5*grad_seg_img_penalty*metadata['r1_img_lambda'] + 0.5*grad_seg_mask_penalty*metadata['r1_mask_lambda']
-                g_sem_img_preds, g_sem_mask_preds = discriminator_local_ddp(gen_imgs[:,-3:], gen_mask_choice)
+                g_sem_img_preds, g_sem_mask_preds = discriminator_local_ddp(gen_imgs.detach()[:,-3:], gen_mask_choice.detach())
 
                 g_sem_cross_entropy = torch.nn.CrossEntropyLoss()(g_sem_mask_preds, semantic_choices)
                 r_sem_cross_entropy = torch.nn.CrossEntropyLoss()(r_sem_mask_preds, semantic_choices)

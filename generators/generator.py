@@ -2,7 +2,7 @@ import random
 import torch.nn as nn
 import torch
 import time
-from .fusion_aggregation import *
+from fusion_aggregation import *
 
 
 class Generator3d(nn.Module):
@@ -21,7 +21,7 @@ class Generator3d(nn.Module):
     2. We probably need to test it later, after finishing discriminator and starting training loop
        By test I mean, sand some sample inputs and see how it responds and how the sizes are.
     """
-    def __init__(self, generator_stack, z_dim, hidden_dim, latent_dim, semantic_classes, output_dim, scalar, blocks = 3, device = None):
+    def __init__(self, generator_stack, z_dim, hidden_dim, latent_dim, semantic_classes, output_dim, scalar = None, blocks = 3, device = None):
         super().__init__()
         self.epoch = 0
         self.step = 0
@@ -63,11 +63,19 @@ class Generator3d(nn.Module):
     def get_grad_sdf(self, absolute_sdf, points):
         #absolute : N x(img x img x 24)x1
         with torch.cuda.amp.autocast():
-            grad_sdf = torch.autograd.grad(outputs=self.scalar.scale(absolute_sdf), inputs=points,
-                                grad_outputs=torch.ones_like(sdf),
+            # grad_sdf = torch.autograd.grad(outputs=self.scalar.scale(absolute_sdf), inputs=points,
+            #                     grad_outputs=torch.ones_like(sdf),
+            #                     create_graph=True)[0]
+            #below is temp for cpu
+            # grad_sdf = torch.autograd.grad(outputs=absolute_sdf, inputs=points,
+            #                     grad_outputs=torch.ones_like(absolute_sdf),
+            #                     create_graph=True)[0]
+
+            grad_sdf = torch.autograd.grad(outputs=absolute_sdf, inputs=points,
+                                grad_outputs=torch.ones_like(absolute_sdf),
                                 create_graph=True)[0]
-            
-            grad_sdf = grad_sdf * 1./(self.scalar.get_scale())
+
+            # grad_sdf = grad_sdf * 1./(self.scalar.get_scale())
         return grad_sdf
 
     def forward(self, z_input_one, z_input_two, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, sample_dist=None, freq_bias_init = 30, 
@@ -93,32 +101,46 @@ class Generator3d(nn.Module):
             transformed_ray_directions_expanded = transformed_ray_directions_expanded.expand(-1, -1, num_steps, -1)
             transformed_ray_directions_expanded = transformed_ray_directions_expanded.reshape(batch_size, img_size*img_size*num_steps, 3)
             transformed_points = transformed_points.reshape(batch_size, img_size*img_size*num_steps, 3)
+            # print('shape of transformed points ', transformed_points.shape)
+            # print('shape of transformed_ray_directions points ', transformed_ray_directions_expanded.shape)
+            # print('latent codes ', latent_codes_combined.shape)
 
-            #batch x (img x img x 24) x 1
-            sdf_initial = self.generator.sdf_initial_values(transformed_points, transformed_ray_directions_expanded, 
-                                latent_codes_combined, freq_bias_init, freq_std_init, phase_bias_init , phase_std_init)
+        #batch x (img x img x 24) x 1
+            sdf_initial = self.generator_stack.sdf_initial_values(transformed_points, transformed_ray_directions_expanded, 
+                                latent_codes_combined, True, freq_bias_init, freq_std_init, phase_bias_init , phase_std_init)
             
 
         #coarse shape is N x K x (imgximgx24) x (128 + 3 + 1 + 1)
         # TODO: take special care about z_sample shapes
-        coarse_output = self.generator_stack(transformed_points, transformed_ray_directions_expanded, latent_codes_combined, freq_bias_init, 
-                                            freq_std_init, phase_bias_init, phase_std_init)
-        
+        transformed_points.requires_grad = True
+        with torch.set_grad_enabled(True):
+            coarse_output = self.generator_stack(transformed_points, transformed_ray_directions_expanded, latent_codes_combined, freq_bias_init, 
+                                                freq_std_init, phase_bias_init, phase_std_init)
+            
 
-        # doing the semantic fusion and volume integration to get images and all
-        #Note: 
-        fused_frgb, sdf, mask = semantic_fusion(coarse_output)
-        #adsolute sdf N x (img*img*24) x 1
-        sigma, absolute_sdf = self.residue_sdf(sdf, sdf_initial)
-        sigma = sigma.reshape((batch_size, img_size*img_size, n_steps, 1))
-
-        grad_sdf = self.get_grad_sdf(absolute_sdf, transformed_points)
-        #SHAPES NOTE:
-        #frgb_final : n x ) x (128 + 3) x img_size x img_size
-        #mask_final : n x K x (img) x (img)
-        # we shall handle the random picking of the semantic region in the training loop function
-        frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, batch_size, n_steps, img_size, semantic_classes = semantic_classes, noise_std=0.5)
-
+            # doing the semantic fusion and volume integration to get images and all
+            #Note: 
+            fused_frgb, sdf, mask = semantic_fusion(coarse_output)
+            #adsolute sdf N x (img*img*24) x 1
+            # print('sdf shape is ', sdf.shape)
+            # print('require grad for sdf ', sdf.requires_grad)
+            # print('sdh initial shape is ', sdf_initial.shape)
+            # print('require grad for sdf init ', sdf_initial.requires_grad)
+            sigma, absolute_sdf = self.residue_sdf(sdf, sdf_initial)
+            # print('absolute_sdf initial shape is ', absolute_sdf.shape)
+            sigma = sigma.reshape((batch_size, img_size*img_size, num_steps, 1))
+            # print('require grad for absolute ', absolute_sdf.requires_grad)
+            # print('require grad for transformed_points ', transformed_points.requires_grad)
+            grad_sdf = self.get_grad_sdf(absolute_sdf, transformed_points)
+            # grad_sdf = self.get_grad_sdf(sdf, transformed_points)
+            #SHAPES NOTE:
+            #frgb_final : n x ) x (128 + 3) x img_size x img_size
+            #mask_final : n x K x (img) x (img)
+            # we shall handle the random picking of the semantic region in the training loop function
+            # print('size of coarse is ', coarse_output.shape)
+            # print('size of mask is ', mask.shape)
+            frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, batch_size, num_steps, img_size, semantic_classes = self.semantic_classes, noise_std=0.5)
+        # return frgb_final, torch.cat([pitch, yaw], axis=-1), mask_final, absolute_sdf
         return frgb_final, torch.cat([pitch, yaw], axis=-1), mask_final, grad_sdf, absolute_sdf
         
 
@@ -143,20 +165,20 @@ class Generator3d(nn.Module):
 
         batch_size = z_input_one.shape[0]
         latent_codes = self.generator_stack.extract_latent(z_input_one)
-        latent_codes = latent_codes.unsqueeze(0).repeat(5, 1, 1).unsqueeze(0).repeat(self.semantic_classes, 1, 1, 1) # 5 is hard coded here cause there are 5 layers in the local generator
+        latent_codes = latent_codes.unsqueeze(1).repeat(1, 5, 1).unsqueeze(1).repeat(1, self.semantic_classes, 1, 1) # 5 is hard coded here cause there are 5 layers in the local generator
 
 
         with torch.no_grad():
             points_cam, z_vals, rays_d_cam =  get_initial_rays_trig(batch_size, num_steps, resolution=(img_size, img_size), device=self.device, fov=fov, ray_start=ray_start, ray_end=ray_end)
-            transformed_points, z_vals, transformed_ray_directions, transformed_ray_origins, sdf_initial, pitch, yaw = transform_sampled_points(points_cam, z_vals, rays_d_cam, h_stddev=h_stddev, v_stddev=v_stddev, h_mean=h_mean, v_mean=v_mean, device=self.device, mode=sample_dist)
+            transformed_points, z_vals, transformed_ray_directions, transformed_ray_origins, pitch, yaw = transform_sampled_points(points_cam, z_vals, rays_d_cam, h_stddev=h_stddev, v_stddev=v_stddev, h_mean=h_mean, v_mean=v_mean, device=self.device, mode=sample_dist)
 
             transformed_ray_directions_expanded = torch.unsqueeze(transformed_ray_directions, -2)
             transformed_ray_directions_expanded = transformed_ray_directions_expanded.expand(-1, -1, num_steps, -1)
             transformed_ray_directions_expanded = transformed_ray_directions_expanded.reshape(batch_size, img_size*img_size*num_steps, 3)
             transformed_points = transformed_points.reshape(batch_size, img_size*img_size*num_steps, 3)
 
-            sdf_initial = self.generator.sdf_initial_values(transformed_points, transformed_ray_directions_expanded, 
-                                latent_codes, freq_bias_init, freq_std_init, phase_bias_init , phase_std_init)
+            sdf_initial = self.generator_stack.sdf_initial_values(transformed_points, transformed_ray_directions_expanded, 
+                                latent_codes, True, freq_bias_init, freq_std_init, phase_bias_init , phase_std_init)
 
             #coarse shape is N x K x (imgximgx24) x (128 + 3 + 1 + 1)
             # TODO: take special care about z_sample shapes
@@ -179,7 +201,7 @@ class Generator3d(nn.Module):
                 coarse_output[head:tail,...] = self.generator_stack(
                     transformed_points[head:tail,...], 
                     transformed_ray_directions_expanded[head:tail,...],
-                    latent_codes[:,:,head:tail,:],
+                    latent_codes[head:tail,...],
                     freq_bias_init,
                     freq_std_init,
                     phase_bias_init,
@@ -195,11 +217,11 @@ class Generator3d(nn.Module):
 
              #adsolute sdf N x (img*img*24) x 1
             sigma, absolute_sdf = self.residue_sdf(sdf, sdf_initial)
-            sigma = sigma.reshape((batch_size, img_size*img_size, n_steps, 1))
+            sigma = sigma.reshape((batch_size, img_size*img_size, num_steps, 1))
             #frgb_final : n x ) x (128 + 3) x img_size x img_size
             #mask_final : n x K x (img) x (img)
 
-            frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, batch_size, n_steps, img_size, semantic_classes = semantic_classes, noise_std=0.5)
+            frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, batch_size, num_steps, img_size, semantic_classes = self.semantic_classes, noise_std=0.5)
 
 
         return frgb_final, mask_final, sigma

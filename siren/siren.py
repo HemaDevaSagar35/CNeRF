@@ -19,8 +19,10 @@ def kaiming_leaky_init(m):
 
 def frequency_init(freq):
     def init(m):
+        # print("this is happening")
         with torch.no_grad():
             if isinstance(m, nn.Linear):
+                # print("this is happening")
                 num_input = m.weight.size(-1)
                 m.weight.uniform_(-np.sqrt(6 / num_input) / freq, np.sqrt(6 / num_input) / freq)
     return init
@@ -82,8 +84,10 @@ class FiLMLayer(nn.Module):
         #     print("happening here")
         #     freq = freq.unsqueeze(1).expand_as(x) 
         #     phase_shift = phase_shift.unsqueeze(1).expand_as(x)
-        freq = self.freq(latent_code)
-        phase_shift = self.phase(latent_code)
+        freq = freq_std_init*self.freq(latent_code) + freq_bias_init
+        # print(freq.shape)
+        # print(x.shape)
+        phase_shift = phase_std_init*self.phase(latent_code) + phase_bias_init
         return torch.sin(freq * x + phase_shift)
 
 class LocalGeneratorSiren(nn.Module):
@@ -97,7 +101,7 @@ class LocalGeneratorSiren(nn.Module):
     # Make sure the dimensions are consistent
     # summary(gen, [(1, 64*64*24, 3), (1, 1, 640),(1, 1, 640), (1,64*64*24, 3)], device = 'cpu')
 
-    def __init__(self, hidden_dim=128, latent_dim = 256, semantic_classes = 12):
+    def __init__(self, hidden_dim=128, latent_dim = 256):
         super().__init__()
         # self.device = device
         # self.input_dim = input_dim
@@ -154,24 +158,31 @@ class LocalGeneratorSiren(nn.Module):
         
     #     return self.shape_network(x, latent_code)
 
-    def forward(self, input, latent_code, ray_directions, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25):
+    def forward(self, input, latent_code, ray_directions, sdf_initial_bool = False, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25):
         # ray direction is the view angles
-        print("input is")
-        print(input.shape)
+        # reshape latent code here to batch size x 5 x 256
+        # print("input is")
+        # print(input.shape)
         input = self.gridwarper(input) #modifier 1
         x = input
         # latent_code_freq = latent_code_freq*15 + 30 #something we need to dabble with later
-        print(x.shape)
+        # print(x.shape)
         j = 0
-        for index, layer in enumerate(self.shape_network):  
-            x = layer(x, latent_code[j], freq_bias_init, freq_std_init, phase_bias_init, phase_std_init)
+        for index, layer in enumerate(self.shape_network):
+            # print(j)
+            # print("inside local ",latent_code[:,j:j+1,:].shape)
+            x = layer(x, latent_code[:,j:j+1,:], freq_bias_init, freq_std_init, phase_bias_init, phase_std_init)
             j += 1
         
         mask_input = torch.cat([ray_directions, x], axis=-1)
 
         for idx, layer in enumerate(self.texture_network):
-            x = layer(x, latent_code[j], freq_bias_init, freq_std_init, phase_bias_init, phase_std_init)
+            x = layer(x, latent_code[:,j:j+1,:], freq_bias_init, freq_std_init, phase_bias_init, phase_std_init)
             j += 1
+
+        sdf_output = self.sdf_layer(x)
+        if sdf_initial_bool:
+            return sdf_output
 
         feature_input = torch.cat([ray_directions, x], axis=-1)
 
@@ -179,7 +190,7 @@ class LocalGeneratorSiren(nn.Module):
 
         mask_output = self.mask_layer(mask_input)
         color_output = self.color_layer(feature_output)
-        sdf_output = self.sdf_layer(x)
+        # sdf_output = self.sdf_layer(x)
       
         return torch.cat([feature_output, color_output, mask_output, sdf_output], axis=-1)
 
@@ -190,9 +201,10 @@ class GeneratorStackSiren(nn.Module):
        hidden_dim=128, semantic_classes = 12, blocks = 3
 
        parameters calculation: 
-        1. mapping: (100*256 + 256) + 2*(256*256 + 256) = 25856 + 131584 = 157440
+        1. mapping : 197376
+        2. local generator : 413064
         2. generator: 12*413064 = 4956768
-        total = 157440 + 4956768 = 5114208
+        total = 157440 + 413064 + 4956768 = 5,567,208
     '''
     def __init__(self, z_dim, hidden_dim, latent_dim, semantic_classes, blocks):
         super().__init__()
@@ -202,12 +214,12 @@ class GeneratorStackSiren(nn.Module):
         self.semantic_classes = semantic_classes
         for i in range(semantic_classes):
             self.generator_list.append(
-                LocalGeneratorSiren(hidden_dim, latent_dim, semantic_classes)
+                LocalGeneratorSiren(hidden_dim, latent_dim)
                 )
         
         self.generator_list = nn.ModuleList(self.generator_list)
 
-        self.sdf_init_network = LocalGeneratorSiren(hidden_dim, latent_dim, semantic_classes)
+        self.sdf_init_network = LocalGeneratorSiren(hidden_dim, latent_dim)
 
     def extract_latent(self, input):
         return self.mapping_network(input)
@@ -217,7 +229,7 @@ class GeneratorStackSiren(nn.Module):
     def shuffle_latent(self, semantic_classes, latent_code_one, latent_code_two, shape_depth=3, texture_depth = 2):
         # I am only shuffling full latent code not doing shuffling at texture and shape level
         # N x 256 , N x 256 - 12
-        #output shape is 12 x 5 x N x 256
+        #output shape is 12 x 5 x N x 256 - N x 12 x 5 x 256 
         
         shuffled_codes = []
         for i in range(semantic_classes):
@@ -225,21 +237,23 @@ class GeneratorStackSiren(nn.Module):
             for j in range(latent_code_one.shape[0]):
                 sample = torch.randint(0, 3, (1,))[0]
                 if sample == 0:
-                    ith_level.append(latent_code_one[j:j+1,:].repeat(shape_depth+texture_depth, 1).unsqueeze(1))
+                    ith_level.append(latent_code_one[j:j+1,:].repeat(shape_depth+texture_depth, 1).unsqueeze(0))
                 elif sample == 2:
-                    ith_level.append(latent_code_two[j:j+1,:].repeat(shape_depth+texture_depth, 1).unsqueeze(1))
+                    ith_level.append(latent_code_two[j:j+1,:].repeat(shape_depth+texture_depth, 1).unsqueeze(0))
                 else:
                     ith_level.append(torch.cat([latent_code_one[j:j+1,:].repeat(shape_depth, 1),
-                        latent_code_two[j:j+1,:].repeat(texture_depth, 1)],axis=0).unsqueeze(1))
-            #5 x N x 256
-            ith_level = torch.cat(ith_level, axis=1)
-            ith_level = ith_level.unsqueeze(0)
+                        latent_code_two[j:j+1,:].repeat(texture_depth, 1)],axis=0).unsqueeze(0))
+            #N x 5 x 256
+            ith_level = torch.cat(ith_level, axis=0)
+            #N x 1 x 5 x 256
+            ith_level = ith_level.unsqueeze(1)
 
             shuffled_codes.append(ith_level)
-        return torch.cat(shuffled_codes, axis=0)
+        #N x 12 x 5 x 256
+        return torch.cat(shuffled_codes, axis=1)
     
     def mix_latent_codes(self, z_sample_one, z_sample_two):
-        #output shape 12 x 5 x N x 256
+        #N x 12 x 5 x 256
         if z_sample_two is None:
             latent_code_combined = self.extract_latent(torch.cat([z_sample_one, z_sample_one], axis=0))
         else:
@@ -248,9 +262,9 @@ class GeneratorStackSiren(nn.Module):
         latent_codes_combined = self.shuffle_latent(self.semantic_classes, latent_code_combined[:N,:], latent_code_combined[N:,:])
         return latent_codes_combined
 
-    def sdf_initial_values(self, input, ray_directions, latent_codes_combined, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25):
+    def sdf_initial_values(self, input, ray_directions, latent_codes_combined, sdf_initial_bool = True, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25):
 
-        return self.sdf_init_network(input, latent_codes_combined[0], ray_directions, freq_bias_init,  freq_std_init, phase_bias_init, phase_std_init)
+        return self.sdf_init_network(input, latent_codes_combined[:,0,:,:], ray_directions, sdf_initial_bool, freq_bias_init,  freq_std_init, phase_bias_init, phase_std_init)
 
     def forward(self, input, ray_directions, latent_codes_combined, freq_bias_init = 30, freq_std_init = 15, phase_bias_init = 0, phase_std_init = 0.25):
         #Note this is for only training.
@@ -260,11 +274,11 @@ class GeneratorStackSiren(nn.Module):
         
         outputs = []
         for i in range(self.semantic_classes):
-            gen_output = self.generator_list[i](input, latent_codes_combined[i], ray_directions, freq_bias_init,  freq_std_init, phase_bias_init, phase_std_init)
+            # print("done")
+            gen_output = self.generator_list[i](input, latent_codes_combined[:,i,:,:], ray_directions, False, freq_bias_init,  freq_std_init, phase_bias_init, phase_std_init)
             gen_output = torch.unsqueeze(gen_output, 1)
-        
+            # print("gen output is. ", gen_output.shape)
             outputs.append(gen_output)
-        
         return torch.cat(outputs, axis=1)
 
     

@@ -120,6 +120,7 @@ class GlobalDiscriminator(nn.Module):
     NOTE: we are not doing progressive training here. Do framing with nn.sequential
     NOTE: I am summing the ouptut from both branches. Not clear from the paper
     if it should be sum or append. But for now I am going to sum.
+    GD : 24, 192, 355 - 24M
     """
     def __init__(self, semantic_classes=12):
         super().__init__()
@@ -129,7 +130,7 @@ class GlobalDiscriminator(nn.Module):
             AdapterBlock(3, 128),
             ResidualCoordConvBlock(128, 256, downsample=True), # 64 x 64 --> 32 x 32
             ResidualCoordConvBlock(256, 400, downsample=True), # 32 x 32 ---> 16 x 16
-            ResidualCoordConvBlock(256, 400, downsample=True), # 16 x 16 ---> 8 x 8
+            ResidualCoordConvBlock(400, 400, downsample=True), # 16 x 16 ---> 8 x 8
             ResidualCoordConvBlock(400, 400, downsample=True), # 8 x 8 ---> 4 x 4
             ResidualCoordConvBlock(400, 400, downsample=True), # 4 x 4 ---> 2 x 2
         
@@ -162,14 +163,14 @@ class SemanticDiscriminator(nn.Module):
     This is semantic discriminator. Output would be 1 + 12(semantic labels)
     output for final layer is not given in the paper. For now keeping at
     256
-    GD --
+    SD -- 46, 341, 645 (47M)
     """
     def __init__(self, semantic_classes=12):
         super().__init__()
         self.epoch = 0
         self.step = 0
         self.color_layers = nn.Sequential( 
-            AdapterBlock(3, 128),
+            AdapterBlock(3, 256),
             ResidualCoordConvBlock(256, 512, downsample=True), # 64 x 64 --> 32 x 32
             ResidualCoordConvBlock(512, 512, downsample=True), # 32 x 32 ---> 16 x 16
             ResidualCoordConvBlock(512, 512, downsample=True), # 16 x 16 ---> 8 x 8
@@ -179,7 +180,7 @@ class SemanticDiscriminator(nn.Module):
         )
 
         self.seg_layers = nn.Sequential( 
-            AdapterBlock(3, 128),
+            AdapterBlock(1, 256),
             ResidualCoordConvBlock(256, 512, downsample=True), # 64 x 64 --> 32 x 32
             ResidualCoordConvBlock(512, 512, downsample=True), # 32 x 32 ---> 16 x 16
             ResidualCoordConvBlock(512, 512, downsample=True), # 16 x 16 ---> 8 x 8
