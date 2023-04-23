@@ -63,19 +63,19 @@ class Generator3d(nn.Module):
     def get_grad_sdf(self, absolute_sdf, points):
         #absolute : N x(img x img x 24)x1
         with torch.cuda.amp.autocast():
-            # grad_sdf = torch.autograd.grad(outputs=self.scalar.scale(absolute_sdf), inputs=points,
-            #                     grad_outputs=torch.ones_like(sdf),
-            #                     create_graph=True)[0]
+            grad_sdf = torch.autograd.grad(outputs=self.scalar.scale(absolute_sdf), inputs=points,
+                                grad_outputs=torch.ones_like(sdf),
+                                create_graph=True)[0]
             #below is temp for cpu
             # grad_sdf = torch.autograd.grad(outputs=absolute_sdf, inputs=points,
             #                     grad_outputs=torch.ones_like(absolute_sdf),
             #                     create_graph=True)[0]
 
-            grad_sdf = torch.autograd.grad(outputs=absolute_sdf, inputs=points,
-                                grad_outputs=torch.ones_like(absolute_sdf),
-                                create_graph=True)[0]
+            # grad_sdf = torch.autograd.grad(outputs=absolute_sdf, inputs=points,
+            #                     grad_outputs=torch.ones_like(absolute_sdf),
+            #                     create_graph=True)[0]
 
-            # grad_sdf = grad_sdf * 1./(self.scalar.get_scale())
+            grad_sdf = grad_sdf * 1./(self.scalar.get_scale())
         return grad_sdf
 
     def forward(self, z_input_one, z_input_two, img_size, fov, ray_start, ray_end, num_steps, h_stddev, v_stddev, h_mean, v_mean, sample_dist=None, freq_bias_init = 30, 
