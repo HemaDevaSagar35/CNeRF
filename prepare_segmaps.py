@@ -46,6 +46,7 @@ def collapse_segment(segmap):
     segmap[segmap == 18] = 16
     segmap[segmap == 16] = 17
     # print(sum(sum(segmap)))
+    #0, 1, 2, 3, 4, 6, 8, 10, 13, 14, 15, 17
     return segmap
 
 

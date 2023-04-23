@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import random
-from math_utils_torch import *
+from .math_utils_torch import *
 
 def semantic_fusion(output_generator):
     # output_generator shape : N x K x (imgximgx24) x (128 + 3 + 1 + 1)
@@ -24,7 +24,7 @@ def semantic_fusion(output_generator):
 
     
 
-def volume_aggregration(fused_frgb, sigma, mask, z_vals, n, n_steps, img_size, semantic_classes = 12, noise_std=0.5):
+def volume_aggregration(fused_frgb, sigma, mask, z_vals, n, n_steps, img_size, device, semantic_classes = 12, noise_std=0.5):
     #fused_frgb : N x (imgximgx24) x (128 + 3)
     # sdf : N x K x (imgximgx24) x (1)
     # sdf_initial : N x (imgximgx24) x 1
@@ -46,7 +46,7 @@ def volume_aggregration(fused_frgb, sigma, mask, z_vals, n, n_steps, img_size, s
     delta_inf = 1e10 * torch.ones_like(deltas[:, :, :1])
     deltas = torch.cat([deltas, delta_inf], -2)
     # print("REACHED 2")
-    noise = torch.randn(sigma.shape) * noise_std
+    noise = torch.randn(sigma.shape, device=device) * noise_std
     alphas = 1 - torch.exp(-deltas * (F.relu(sigma + noise)))
     alphas_shifted = torch.cat([torch.ones_like(alphas[:, :, :1]), 1-alphas + 1e-10], -2)
     # weights : N x (img x img) x 24 x 1

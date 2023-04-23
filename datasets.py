@@ -77,7 +77,7 @@ class FFHQDataset(Dataset):
   
     """
     def __init__(self, dataset_path, img_size, return_label=True, **kwargs):
-        img_base = 'ffhq_mask_img/*.jpg'
+        img_base = 'ffhq_mask_img/*.png'
         label_base = 'ffhq_mask_mask/*.png'
         self.img_path = os.path.join(dataset_path, img_base)
         self.label_path = os.path.join(dataset_path,  label_base)
@@ -106,10 +106,11 @@ class FFHQDataset(Dataset):
         return len(self.data_img)
 
     def _mask_labels(self, mask_np):
-        label_size = len(self.color_map.keys())
+        # label_size = len(self.color_map.keys())
+        label_size = 12
         labels = np.zeros((label_size, mask_np.shape[0], mask_np.shape[1]))
-        for i in range(label_size):
-            labels[i][mask_np==i+1] = 1.0
+        for i, v in enumerate([0, 1, 2, 3, 4, 6, 8, 10, 13, 14, 15, 17]):
+            labels[i][mask_np==v] = 1.0
         return labels
 
     def __getitem__(self, index):

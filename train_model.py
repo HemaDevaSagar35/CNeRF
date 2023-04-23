@@ -133,8 +133,8 @@ def train(rank, world_size, opt):
             metadata['semantic_classes']
         ).to(device)
 
-        ema = ExponentialMovingAverage(generator.parameters(), decay=0.999)
-        ema2 = ExponentialMovingAverage(generator.parameters(), decay=0.9999)
+        ema = ExponentialMovingAverage(generator_all.parameters(), decay=0.999)
+        ema2 = ExponentialMovingAverage(generator_all.parameters(), decay=0.9999)
 
     generator_ddp = DDP(generator_all, device_ids = [rank], find_unused_parameters=True)
     discriminator_global_ddp = DDP(discriminator_global, device_ids=[rank], find_unused_parameters=True, broadcast_buffers=False)
@@ -215,7 +215,7 @@ def train(rank, world_size, opt):
                 #save stuff
                 torch.save(ema, os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema.pth'))
                 torch.save(ema2, os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema2.pth'))
-                torch.save(generator_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_generator.pth'))
+                torch.save(generator_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_generator_all.pth'))
                 torch.save(discriminator_global_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_discriminator_global.pth'))
                 torch.save(discriminator_local_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_discriminator_local.pth'))
                 torch.save(optimizer_G.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_optimizer_G.pth'))
@@ -312,7 +312,7 @@ def train(rank, world_size, opt):
             with torch.cuda.amp.autocast():
                 r_sem_img_preds, r_sem_mask_preds = discriminator_local_ddp(real_imgs, real_mask_choice)
             
-            real_mask_choice.requires_grad = True
+            # real_mask_choice.requires_grad = True
             grad_seg_img_penalty, grad_seg_mask_penalty = discriminator_loss_r1(r_sem_img_preds, real_imgs, real_mask_choice, scaler)
             with torch.cuda.amp.autocast():
                 grad_r1_seg_penalty = 0.5*grad_seg_img_penalty*metadata['r1_img_lambda'] + 0.5*grad_seg_mask_penalty*metadata['r1_mask_lambda']
@@ -382,7 +382,7 @@ def train(rank, world_size, opt):
                 scaler.scale(total_g_loss).backward()
 
             if rank == 0:
-                logger.add_scalar('g_loss', total_g_loss.item(), generator.step)
+                logger.add_scalar('g_loss', total_g_loss.item(), generator_all.step)
 
             scaler.unscale_(optimizer_G)
             ##Caution: gad clips are not there in original paper, so use it with caution
@@ -478,7 +478,7 @@ def train(rank, world_size, opt):
                 if discriminator_global.step % opt.sample_interval == 0:
                     torch.save(ema, os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema.pth'))
                     torch.save(ema2, os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema2.pth'))
-                    torch.save(generator_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_generator.pth'))
+                    torch.save(generator_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_generator_all.pth'))
                     torch.save(discriminator_global_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_discriminator_global.pth'))
                     torch.save(discriminator_local_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_discriminator_local.pth'))
                     torch.save(optimizer_G.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_optimizer_G.pth'))
@@ -498,7 +498,7 @@ def train(rank, world_size, opt):
                 ema.store(generator_ddp.parameters())
                 ema.copy_to(generator_ddp.parameters())
                 generator_ddp.eval()
-                fid_evaluation.output_images_double(generator_ddp, metadata, rank, world_size, generated_dir)
+                fid_evaluation.output_images(generator_ddp, metadata, rank, world_size, generated_dir)
                 ema.restore(generator_ddp.parameters())
                 dist.barrier()
 

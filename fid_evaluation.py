@@ -44,7 +44,7 @@ def output_real_images(dataloader, num_imgs, real_dir):
             save_image(img, os.path.join(real_dir, f'{img_counter:0>5}.jpg'), normalize=True, range=(-1, 1))
             img_counter += 1
 
-def setup_evaluation(dataset_name, generated_dir, dataset_path, target_size=256, num_imgs=8000, **kwargs):
+def setup_evaluation(dataset_name, generated_dir, dataset_path, target_size=64, num_imgs=8000, **kwargs):
 
     # Only make real images if they haven't been made yet
    
@@ -83,8 +83,9 @@ def output_images(generator, input_metadata, rank, world_size, output_dir, num_i
         while img_counter < num_imgs:
             z_sample = torch.randn((metadata['batch_size'], metadata['z_dim']), device=generator.module.device)
             
-            generated_imgs = generator.module.staged_forward(z_sample, **metadata)
+            generated_imgs, _, _ = generator.module.stage_forward(z_sample, **metadata)
             for img in generated_imgs:
+                # print(img.shape)
                 if img.shape[0] != 3:
                     img = img[-3:]
                 save_image(img, os.path.join(output_dir, f'{img_counter:0>5}.jpg'), normalize=True, range=(-1, 1))

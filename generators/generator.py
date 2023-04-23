@@ -2,7 +2,7 @@ import random
 import torch.nn as nn
 import torch
 import time
-from fusion_aggregation import *
+from .fusion_aggregation import *
 
 
 class Generator3d(nn.Module):
@@ -139,7 +139,7 @@ class Generator3d(nn.Module):
             # we shall handle the random picking of the semantic region in the training loop function
             # print('size of coarse is ', coarse_output.shape)
             # print('size of mask is ', mask.shape)
-            frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, batch_size, num_steps, img_size, semantic_classes = self.semantic_classes, noise_std=0.5)
+            frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, batch_size, num_steps, img_size, self.device, semantic_classes = self.semantic_classes, noise_std=0.5)
         # return frgb_final, torch.cat([pitch, yaw], axis=-1), mask_final, absolute_sdf
         return frgb_final, torch.cat([pitch, yaw], axis=-1), mask_final, grad_sdf, absolute_sdf
         
@@ -186,7 +186,7 @@ class Generator3d(nn.Module):
             # coarse_output = self.generator_stack(transformed_points, transformed_ray_directions_expanded, latent_codes, freq_bias_init, 
             #                                     freq_std_init, phase_bias_init, phase_std_init)
 
-            coarse_output = torch.zeros((batch_size, self.semantic_classes, img_size*img_size*num_steps, self.hidden_dim + 5))
+            coarse_output = torch.zeros((batch_size, self.semantic_classes, img_size*img_size*num_steps, self.hidden_dim + 5), device=self.device)
             
             quo = batch_size // max_batch
             rem = min(1, batch_size % max_batch)
@@ -221,7 +221,7 @@ class Generator3d(nn.Module):
             #frgb_final : n x ) x (128 + 3) x img_size x img_size
             #mask_final : n x K x (img) x (img)
 
-            frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, batch_size, num_steps, img_size, semantic_classes = self.semantic_classes, noise_std=0.5)
+            frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, batch_size, num_steps, img_size, self.device, semantic_classes = self.semantic_classes, noise_std=0.5)
 
 
         return frgb_final, mask_final, sigma
