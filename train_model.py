@@ -74,6 +74,12 @@ def z_sampler(shape, device, dist):
         z = torch.rand(shape, device=device) * 2 - 1
     return z
 
+def sum_params(model):
+    s = 0.0
+    for p in model.parameters():
+        s += p.cpu().data.numpy().sum()
+    return s
+
 def train(rank, world_size, opt):
     """
     opt is the argument dict it has
@@ -213,8 +219,8 @@ def train(rank, world_size, opt):
         for i, (imgs, label, _) in enumerate(dataloader):
             if discriminator_global.step % opt.model_save_interval == 0 and rank == 0:
                 #save stuff
-                torch.save(ema, os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema.pth'))
-                torch.save(ema2, os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema2.pth'))
+                torch.save(ema.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema.pth'))
+                torch.save(ema2.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema2.pth'))
                 torch.save(generator_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_generator_all.pth'))
                 torch.save(discriminator_global_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_discriminator_global.pth'))
                 torch.save(discriminator_local_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_discriminator_local.pth'))
@@ -453,7 +459,7 @@ def train(rank, world_size, opt):
                             copied_metadata['h_mean'] += 0.5
                             ## TODO: rectify the stage forward method. output should be n x (3 + k) x img_size x img_size
                             gen_imgs, gen_masks_out, gen_sigma = generator_ddp.module.stage_forward(z_sample_fixed.to(device), **copied_metadata)
-                            gen_labels = mask2color(gen_sigma)
+                            gen_labels = mask2color(gen_masks_out)
                     
 
                     save_image(gen_labels[:25], os.path.join(opt.output_dir, f"{discriminator_global.step}_seg_tilted_ema.png"), nrow=5, normalize=True)
@@ -476,8 +482,8 @@ def train(rank, world_size, opt):
                     ema.restore(generator_ddp.parameters())
 
                 if discriminator_global.step % opt.sample_interval == 0:
-                    torch.save(ema, os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema.pth'))
-                    torch.save(ema2, os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema2.pth'))
+                    torch.save(ema.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema.pth'))
+                    torch.save(ema2.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_ema2.pth'))
                     torch.save(generator_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_generator_all.pth'))
                     torch.save(discriminator_global_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_discriminator_global.pth'))
                     torch.save(discriminator_local_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_discriminator_local.pth'))
@@ -518,6 +524,18 @@ def train(rank, world_size, opt):
         discriminator_local.epoch += 1
         generator_all.epoch += 1
 
+    #save the final snapshot of the model at the end of all epochs.
+    torch.save(ema.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_ema.pth'))
+    torch.save(ema2.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_ema2.pth'))
+    torch.save(generator_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_generator_all.pth'))
+    torch.save(discriminator_global_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_discriminator_global.pth'))
+    torch.save(discriminator_local_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_discriminator_local.pth'))
+    torch.save(optimizer_G.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_optimizer_G.pth'))
+    torch.save(optimizer_global_D.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_optimizer_global_D.pth'))
+    torch.save(optimizer_local_D.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_optimizer_local_D.pth'))
+    torch.save(scaler.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_scaler.pth'))
+    torch.save(generator_losses, os.path.join(opt.output_dir, '_finalgenerator.losses'))
+    torch.save(discriminator_losses, os.path.join(opt.output_dir, '_final_discriminator.losses'))
     cleanup()
 
 if __name__ == '__main__':

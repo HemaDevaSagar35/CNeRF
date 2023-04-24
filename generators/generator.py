@@ -64,7 +64,7 @@ class Generator3d(nn.Module):
         #absolute : N x(img x img x 24)x1
         with torch.cuda.amp.autocast():
             grad_sdf = torch.autograd.grad(outputs=self.scalar.scale(absolute_sdf), inputs=points,
-                                grad_outputs=torch.ones_like(sdf),
+                                grad_outputs=torch.ones_like(absolute_sdf),
                                 create_graph=True)[0]
             #below is temp for cpu
             # grad_sdf = torch.autograd.grad(outputs=absolute_sdf, inputs=points,

@@ -9,3 +9,6 @@ discriminators/testing.ipynb
 discriminators/.ipynb_checkpoints
 generators/testing.ipynb
 generators/.ipynb_checkpoints
+testing_segmaps.ipynb
+.ipynb_checkpoints
+testing_ema.ipynb

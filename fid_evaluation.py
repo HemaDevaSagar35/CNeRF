@@ -93,7 +93,7 @@ def output_images(generator, input_metadata, rank, world_size, output_dir, num_i
                 if rank == 0: pbar.update(world_size)
     if rank == 0: pbar.close()
 
-def calculate_fid(dataset_name, generated_dir, target_size=256, **kwargs):
+def calculate_fid(dataset_name, generated_dir, target_size=64, **kwargs):
    
     real_dir = os.path.join('/evaluation/', 'EvalImages', dataset_name + '_real_images_' + str(target_size))
     fid = fid_score.calculate_fid_given_paths([real_dir, generated_dir], 128, 'cuda', 2048)
