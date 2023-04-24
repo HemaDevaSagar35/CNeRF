@@ -525,17 +525,18 @@ def train(rank, world_size, opt):
         generator_all.epoch += 1
 
     #save the final snapshot of the model at the end of all epochs.
-    torch.save(ema.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_ema.pth'))
-    torch.save(ema2.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_ema2.pth'))
-    torch.save(generator_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_generator_all.pth'))
-    torch.save(discriminator_global_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_discriminator_global.pth'))
-    torch.save(discriminator_local_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_discriminator_local.pth'))
-    torch.save(optimizer_G.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_optimizer_G.pth'))
-    torch.save(optimizer_global_D.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_optimizer_global_D.pth'))
-    torch.save(optimizer_local_D.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_optimizer_local_D.pth'))
-    torch.save(scaler.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_scaler.pth'))
-    torch.save(generator_losses, os.path.join(opt.output_dir, '_finalgenerator.losses'))
-    torch.save(discriminator_losses, os.path.join(opt.output_dir, '_final_discriminator.losses'))
+    if rank == 0:
+        torch.save(ema.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_ema.pth'))
+        torch.save(ema2.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_ema2.pth'))
+        torch.save(generator_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_generator_all.pth'))
+        torch.save(discriminator_global_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_discriminator_global.pth'))
+        torch.save(discriminator_local_ddp.module, os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_discriminator_local.pth'))
+        torch.save(optimizer_G.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_optimizer_G.pth'))
+        torch.save(optimizer_global_D.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_optimizer_global_D.pth'))
+        torch.save(optimizer_local_D.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_optimizer_local_D.pth'))
+        torch.save(scaler.state_dict(), os.path.join(opt.output_dir, str(discriminator_global.step) + '_final_scaler.pth'))
+        torch.save(generator_losses, os.path.join(opt.output_dir, '_finalgenerator.losses'))
+        torch.save(discriminator_losses, os.path.join(opt.output_dir, '_final_discriminator.losses'))
     cleanup()
 
 if __name__ == '__main__':
