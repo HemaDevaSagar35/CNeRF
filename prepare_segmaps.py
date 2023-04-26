@@ -108,7 +108,7 @@ def face_parsing(img_path, save_dir, bisNet):
     #collapse
     seg_mask = Image.fromarray(seg_mask.astype(np.uint8), mode="L")
     img_ind = os.path.basename(img_path)
-    save_path = os.path.join(save_dir, 'masks512x512', img_ind)
+    save_path = os.path.join(save_dir, 'ffhq_mask_mask', img_ind)
     seg_mask.save(save_path)
 
     seg_label_rgb = vis_condition_img_celebahq(seg_label)

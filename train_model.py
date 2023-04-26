@@ -98,7 +98,7 @@ def train(rank, world_size, opt):
     metadata = curriculums.extract_metadata(curriculum, 0)
 
     #curriculum dict
-    z_sample_fixed = z_sampler((25, metadata['z_dim']), device='cpu', dist=metadata['z_dist'])
+    z_sample_fixed = z_sampler((4, metadata['z_dim']), device='cpu', dist=metadata['z_dist'])
     CHANNELS = 3
     #curriculum dict
     # CHANNELS_SEG = curriculum.get('channel_seg', 12)
@@ -113,14 +113,18 @@ def train(rank, world_size, opt):
             generator_all = torch.load(os.path.join(opt.load_dir, 'generator_all.pth'), map_location=device)
             discriminator_global = torch.load(os.path.join(opt.load_dir, 'discriminator_global.pth'), map_location=device)
             discriminator_local = torch.load(os.path.join(opt.load_dir, 'discriminator_local.pth'), map_location=device)
-            ema = torch.load(os.path.join(opt.load_dir, 'ema.pth'), map_location=device)
-            ema2 = torch.load(os.path.join(opt.load_dir, 'ema2.pth'), map_location=device)
+            ema = ExponentialMovingAverage(generator_all.parameters(), decay=0.999)
+            ema2 = ExponentialMovingAverage(generator_all.parameters(), decay=0.9999)
+            ema.load_state_dict(torch.load(os.path.join(opt.load_dir, "ema.pth"), map_location=device))
+            ema2.load_state_dict(torch.load(os.path.join(opt.load_dir, "ema2.pth"), map_location=device))
         else:
             generator_all = torch.load(os.path.join(opt.load_dir, f'{opt.load_step}_generator_all.pth'), map_location=device)
             discriminator_global = torch.load(os.path.join(opt.load_dir, f'{opt.load_step}_discriminator_global.pth'), map_location=device)
             discriminator_local = torch.load(os.path.join(opt.load_dir, f'{opt.load_step}_discriminator_local.pth'), map_location=device)
-            ema = torch.load(os.path.join(opt.load_dir, f'{opt.load_step}_ema.pth'), map_location=device)
-            ema2 = torch.load(os.path.join(opt.load_dir, f'{opt.load_step}_ema2.pth'), map_location=device)
+            ema = ExponentialMovingAverage(generator_all.parameters(), decay=0.999)
+            ema2 = ExponentialMovingAverage(generator_all.parameters(), decay=0.9999)
+            ema.load_state_dict(torch.load(os.path.join(opt.load_dir, f'{opt.load_step}_ema.pth'), map_location=device))
+            ema2.load_state_dict(torch.load(os.path.join(opt.load_dir, f'{opt.load_step}_ema2.pth'), map_location=device))
     else:
         generator_all = generator.Generator3d(siren.GeneratorStackSiren, 
             z_dim = metadata['z_dim'],
@@ -298,6 +302,9 @@ def train(rank, world_size, opt):
             
             if rank == 0:
                 logger.add_scalar('d_global_loss', d_global_loss.item(), discriminator_global.step)
+                logger.add_scalar('d_global_accuracy_fake',((F.sigmoid(g_img_preds) < 0.5)/(g_img_preds.shape[0])).item(), discriminator_global.step)
+                logger.add_scalar('d_global_accuracy_real',((F.sigmoid(r_img_preds) >= 0.5)/(r_img_preds.shape[0])).item(), discriminator_global.step)
+
             
             optimizer_global_D.zero_grad()
             scaler.scale(d_global_loss).backward()
@@ -334,6 +341,8 @@ def train(rank, world_size, opt):
             
             if rank == 0:
                 logger.add_scalar('d_local_loss', d_local_loss.item(), discriminator_local.step)
+                logger.add_scalar('d_local_accuracy_fake',((F.sigmoid(g_sem_img_preds) < 0.5)/(g_sem_img_preds.shape[0])).item(), discriminator_global.step)
+                logger.add_scalar('d_local_accuracy_real',((F.sigmoid(r_sem_img_preds) >= 0.5)/(r_sem_img_preds.shape[0])).item(), discriminator_global.step)
             
             optimizer_local_D.zero_grad()
             scaler.scale(d_local_loss).backward()
@@ -355,6 +364,8 @@ def train(rank, world_size, opt):
             else:
                 z_sample_two=None
             
+            fake_accuracy_global = []
+            fake_accuracy_local = []
             for split in range(metadata['batch_split']):
                 with torch.cuda.amp.autocast():
                     z_sample_one_subset = z_sample_one[split * split_batch_size:(split+1) * split_batch_size]
@@ -372,6 +383,9 @@ def train(rank, world_size, opt):
                         g_img_preds, g_img_positions_pred = discriminator_global_ddp(g_imgs[:,-3:], g_mask)
                         g_sem_img_preds, g_sem_mask_preds = discriminator_local_ddp(g_imgs[:,-3:], g_mask_choice)
 
+                        fake_accuracy_global.append((torch.sigmoid(g_img_preds) < 0.5).item())
+                        fake_accuracy_local.append((torch.sigmoid(g_sem_img_preds) < 0.5).item())
+
                     #view loss
                     g_position_loss = torch.nn.SmoothL1Loss()(g_img_positions_pred, g_pos) * metadata['pos_lambda']
                     g_cross_entropy = torch.nn.CrossEntropyLoss()(g_sem_mask_preds, semantic_choices) #cross entropy
@@ -382,13 +396,16 @@ def train(rank, world_size, opt):
                     total_g_loss = torch.nn.functional.softplus(-g_img_preds).mean() + g_position_loss + metadata['eikonol_lambda']*eikonol_loss + \
                                    metadata['minimal_surface_lambda']*minimal_surface_loss + (torch.nn.functional.softplus(-g_sem_img_preds).mean() + g_cross_entropy)*metadata['local_d_lambda']
 
-
+                    
                     generator_losses.append(total_g_loss.item())
 
                 scaler.scale(total_g_loss).backward()
 
             if rank == 0:
                 logger.add_scalar('g_loss', total_g_loss.item(), generator_all.step)
+                logger.add_scalar('g_accuracy_fake_global_gen', torch.cat(fake_accuracy_global, axis=0).mean(), generator_all.step)
+                logger.add_scalar('g_accuracy_fake_local_gen', torch.cat(fake_accuracy_local, axis=0).mean(), generator_all.step)
+
 
             scaler.unscale_(optimizer_G)
             ##Caution: gad clips are not there in original paper, so use it with caution

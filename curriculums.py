@@ -50,6 +50,6 @@ cnerf_stage_one = {
     'phase_bias_init' : 0,
     'phase_std_init' : 0.25,
     'dataset': 'FFHQDataset',
-    'dataset_path': 'data/ffhq_mask',
+    'dataset_path': "D:\\spring2023\\641\\FFHQ\\ffhq_mask\\ffhq_mask_mask"
    
 }

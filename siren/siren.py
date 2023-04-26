@@ -128,7 +128,7 @@ class LocalGeneratorSiren(nn.Module):
         # #: Their implication need to be further understood
         self.shape_network.apply(frequency_init(25))
         self.texture_network.apply(frequency_init(25))
-
+        #notes from source - init was not applied to feature layer
         self.feature_layer.apply(frequency_init(25))
         self.color_layer.apply(frequency_init(25))
         self.mask_layer.apply(frequency_init(25))
@@ -189,7 +189,7 @@ class LocalGeneratorSiren(nn.Module):
         feature_output = self.feature_layer(feature_input)
 
         mask_output = self.mask_layer(mask_input)
-        color_output = self.color_layer(feature_output)
+        color_output = torch.sigmoid(self.color_layer(feature_output))
         # sdf_output = self.sdf_layer(x)
       
         return torch.cat([feature_output, color_output, mask_output, sdf_output], axis=-1)

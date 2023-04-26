@@ -222,7 +222,7 @@ class Generator3d(nn.Module):
             #mask_final : n x K x (img) x (img)
 
             frgb_final, mask_final = volume_aggregration(fused_frgb, sigma, mask, z_vals, batch_size, num_steps, img_size, self.device, semantic_classes = self.semantic_classes, noise_std=0.5)
-
+            
 
         return frgb_final, mask_final, sigma
 

@@ -150,7 +150,7 @@ class GlobalDiscriminator(nn.Module):
     
     def forward(self, color_input, mask_input):
         color_output = self.color_layers(color_input) 
-        print("issue is here")
+        # print("issue is here")
         mask_output = self.mask_layers(mask_input)
 
         x = color_output + mask_output
