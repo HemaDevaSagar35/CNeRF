@@ -80,6 +80,12 @@ def sum_params(model):
         s += p.cpu().data.numpy().sum()
     return s
 
+def check_accuracy(outp):
+    out_send = F.sigmoid(outp)
+    # out_send[out_send < 0.5] = 0.0
+    # out_send[out_send >= 0.5] = 1.0
+    return torch.mean(out_send)
+
 def train(rank, world_size, opt):
     """
     opt is the argument dict it has
@@ -295,15 +301,22 @@ def train(rank, world_size, opt):
                 g_img_preds, g_img_positions_pred = discriminator_global_ddp(gen_imgs.detach()[:,-3:], gen_masks.detach())
 
                 g_position_loss = torch.nn.SmoothL1Loss()(g_img_positions_pred, gen_positions.detach()) * metadata['pos_lambda']
-                d_global_loss = torch.nn.functional.softplus(g_img_preds).mean() + torch.nn.functional.softplus(-r_img_preds).mean() + \
+
+                d_global_gan_g = torch.nn.functional.softplus(g_img_preds).mean()
+                d_global_gan_r = torch.nn.functional.softplus(-r_img_preds).mean()
+                d_global_loss = d_global_gan_g + d_global_gan_r + \
                     grad_r1_penalty + g_position_loss
                 
                 discriminator_losses.append(d_global_loss.item())
             
             if rank == 0:
                 logger.add_scalar('d_global_loss', d_global_loss.item(), discriminator_global.step)
-                logger.add_scalar('d_global_accuracy_fake',((F.sigmoid(g_img_preds) < 0.5)/(g_img_preds.shape[0])).item(), discriminator_global.step)
-                logger.add_scalar('d_global_accuracy_real',((F.sigmoid(r_img_preds) >= 0.5)/(r_img_preds.shape[0])).item(), discriminator_global.step)
+                logger.add_scalar('d_global_fake_score',check_accuracy(g_img_preds).item(), discriminator_global.step)
+                logger.add_scalar('d_global_real_score',check_accuracy(r_img_preds).item(), discriminator_global.step)
+                logger.add_scalar('d_global_loss_gan_fake', d_global_gan_g.item(), discriminator_global.step)
+                logger.add_scalar('d_global_loss_gan_real', d_global_gan_r.item(), discriminator_global.step)
+                logger.add_scalar('d_global_loss_r1', grad_r1_penalty.item(), discriminator_global.step)
+                logger.add_scalar('d_global_loss_view', g_position_loss.item(), discriminator_global.step)
 
             
             optimizer_global_D.zero_grad()
@@ -334,16 +347,25 @@ def train(rank, world_size, opt):
                 g_sem_cross_entropy = torch.nn.CrossEntropyLoss()(g_sem_mask_preds, semantic_choices)
                 r_sem_cross_entropy = torch.nn.CrossEntropyLoss()(r_sem_mask_preds, semantic_choices)
 
-                d_local_loss = (torch.nn.functional.softplus(-r_sem_img_preds).mean() + \
-                               torch.nn.functional.softplus(g_sem_img_preds).mean() + \
+                d_local_gan_g = torch.nn.functional.softplus(g_sem_img_preds).mean()
+                d_local_gan_r = torch.nn.functional.softplus(-r_sem_img_preds).mean()
+
+                d_local_loss = (d_local_gan_g + \
+                               d_local_gan_r + \
                                grad_r1_seg_penalty + g_sem_cross_entropy + r_sem_cross_entropy)*metadata['local_d_lambda']
 
             
             if rank == 0:
                 logger.add_scalar('d_local_loss', d_local_loss.item(), discriminator_local.step)
-                logger.add_scalar('d_local_accuracy_fake',((F.sigmoid(g_sem_img_preds) < 0.5)/(g_sem_img_preds.shape[0])).item(), discriminator_global.step)
-                logger.add_scalar('d_local_accuracy_real',((F.sigmoid(r_sem_img_preds) >= 0.5)/(r_sem_img_preds.shape[0])).item(), discriminator_global.step)
-            
+                logger.add_scalar('d_local_fake_score',check_accuracy(g_sem_img_preds).item(), discriminator_local.step)
+                logger.add_scalar('d_local_real_score',check_accuracy(r_sem_img_preds).item(), discriminator_local.step)
+                logger.add_scalar('d_local_loss_gan_fake', d_local_gan_g.item(), discriminator_local.step)
+                logger.add_scalar('d_local_loss_gan_real', d_local_gan_r.item(), discriminator_local.step)
+                logger.add_scalar('d_local_loss_r1', grad_r1_seg_penalty.item(), discriminator_local.step)
+                logger.add_scalar('d_local_loss_entropy_fake', g_sem_cross_entropy.item(), discriminator_local.step)
+                logger.add_scalar('d_local_loss_entropy_real',r_sem_cross_entropy.item(), discriminator_local.step)
+
+
             optimizer_local_D.zero_grad()
             scaler.scale(d_local_loss).backward()
             scaler.unscale_(optimizer_local_D)
@@ -393,8 +415,10 @@ def train(rank, world_size, opt):
                     #eikonol and minimal surface loss
                     eikonol_loss, minimal_surface_loss = eikonol_surface_loss(g_grad_sdf, g_sdf, metadata['ms_beta'])
                     #TODO: where is eikonol loss
-                    total_g_loss = torch.nn.functional.softplus(-g_img_preds).mean() + g_position_loss + metadata['eikonol_lambda']*eikonol_loss + \
-                                   metadata['minimal_surface_lambda']*minimal_surface_loss + (torch.nn.functional.softplus(-g_sem_img_preds).mean() + g_cross_entropy)*metadata['local_d_lambda']
+                    g_gan_loss = torch.nn.functional.softplus(-g_img_preds).mean()
+                    g_gan_loss_sem = torch.nn.functional.softplus(-g_sem_img_preds).mean()
+                    total_g_loss = g_gan_loss + g_position_loss + metadata['eikonol_lambda']*eikonol_loss + \
+                                   metadata['minimal_surface_lambda']*minimal_surface_loss + (g_gan_loss_sem + g_cross_entropy)*metadata['local_d_lambda']
 
                     
                     generator_losses.append(total_g_loss.item())
@@ -403,9 +427,15 @@ def train(rank, world_size, opt):
 
             if rank == 0:
                 logger.add_scalar('g_loss', total_g_loss.item(), generator_all.step)
-                logger.add_scalar('g_accuracy_fake_global_gen', torch.cat(fake_accuracy_global, axis=0).mean(), generator_all.step)
-                logger.add_scalar('g_accuracy_fake_local_gen', torch.cat(fake_accuracy_local, axis=0).mean(), generator_all.step)
-
+                logger.add_scalar('g_accuracy_fake_global_gen', check_accuracy(torch.cat(fake_accuracy_global,axis=0)).item(), generator_all.step)
+                logger.add_scalar('g_accuracy_fake_local_gen', check_accuracy(torch.cat(fake_accuracy_local,axis=0)).item(), generator_all.step)
+                logger.add_scalar('g_loss_global_fake',g_gan_loss.item(), generator_all.step)
+                logger.add_scalar('g_loss_local_fake', g_gan_loss_sem.item(), generator_all.step)
+                logger.add_scalar('g_loss_view', g_position_loss.item(), generator_all.step)
+                logger.add_scalar('g_loss_entropy', g_cross_entropy.item(), generator_all.step)
+                logger.add_scalar('g_loss_eikonol', metadata['eikonol_lambda']*eikonol_loss.item(), generator_all.step)
+                logger.add_scalar('g_loss_mini_surface', metadata['minimal_surface_lambda']*minimal_surface_loss.item(), generator_all.step)
+                
 
             scaler.unscale_(optimizer_G)
             ##Caution: gad clips are not there in original paper, so use it with caution

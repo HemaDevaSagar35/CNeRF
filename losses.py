@@ -29,6 +29,6 @@ def eikonol_surface_loss(grad_sdf, sdf, beta=100):
     if sdf is None:
         minimal_surface_loss = torch.tensor(0, device=grad_sdf.device)
     else:
-        minimal_surface_loss = torch.exp(-1.0*beta*torch.abs(grad_sdf)).mean()
+        minimal_surface_loss = torch.exp(-1.0*beta*torch.abs(sdf)).mean()
     
     return eikonol_loss, minimal_surface_loss

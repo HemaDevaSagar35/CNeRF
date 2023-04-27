@@ -15,15 +15,15 @@ def semantic_fusion(output_generator):
     frgb = output_generator[...,:-2]
     mask = output_generator[...,-2:-1]
     sdf = output_generator[...,-1:]
-    print("Before fusing rgb max is, ", torch.max(frgb[...,-3:]))
-    print("Before fusing rgb min is, ", torch.min(frgb[...,-3:]))
+    # print("Before fusing rgb max is, ", torch.max(frgb[...,-3:]))
+    # print("Before fusing rgb min is, ", torch.min(frgb[...,-3:]))
     fused_frgb = frgb * mask
-    print("After fusing rgb max is, ", torch.max(fused_frgb[...,-3:]))
-    print("After fusing rgb min is, ", torch.min(fused_frgb[...,-3:]))
+    # print("After fusing rgb max is, ", torch.max(fused_frgb[...,-3:]))
+    # print("After fusing rgb min is, ", torch.min(fused_frgb[...,-3:]))
     # N x (imgximgx24) x (128 + 3)
     fused_frgb = fused_frgb.sum(axis=-3)
-    print("After fusing rgb summing max is, ", torch.max(fused_frgb[...,-3:]))
-    print("After fusing rgb summing min is, ", torch.min(fused_frgb[...,-3:]))
+    # print("After fusing rgb summing max is, ", torch.max(fused_frgb[...,-3:]))
+    # print("After fusing rgb summing min is, ", torch.min(fused_frgb[...,-3:]))
     return fused_frgb, sdf, mask
 
 
@@ -58,18 +58,18 @@ def volume_aggregration(fused_frgb, sigma, mask, z_vals, n, n_steps, img_size, d
     weights = alphas * torch.cumprod(alphas_shifted, -2)[:, :, :-1]
 
     #frgb_final : n x (img_size*img_size) x (128 + 3)
-    print("checking max no change, ", torch.max(fused_frgb[...,-3:]))
-    print("checking min no change, ", torch.min(fused_frgb[...,-3:]))
+    # print("checking max no change, ", torch.max(fused_frgb[...,-3:]))
+    # print("checking min no change, ", torch.min(fused_frgb[...,-3:]))
     frgb_final = torch.sum(fused_frgb*weights, axis=-2)
-    print("after w multi max no change, ", torch.max(frgb_final[...,-3:]))
-    print("after w multi min no change, ", torch.min(frgb_final[...,-3:]))
+    # print("after w multi max no change, ", torch.max(frgb_final[...,-3:]))
+    # print("after w multi min no change, ", torch.min(frgb_final[...,-3:]))
 
-    print("w multi max , ", torch.max(weights))
-    print("w multi min , ", torch.min(weights))
+    # print("w multi max , ", torch.max(weights))
+    # print("w multi min , ", torch.min(weights))
 
     frgb_final[:,:,-3:] = -1 + 2*frgb_final[:,:,-3:]
-    print("after normalize w multi max no change, ", torch.max(frgb_final[...,-3:]))
-    print("after normalize w multi min no change, ", torch.min(frgb_final[...,-3:]))
+    # print("after normalize w multi max no change, ", torch.max(frgb_final[...,-3:]))
+    # print("after normalize w multi min no change, ", torch.min(frgb_final[...,-3:]))
     # print("REACHED 3")
     #mask
     
@@ -78,8 +78,8 @@ def volume_aggregration(fused_frgb, sigma, mask, z_vals, n, n_steps, img_size, d
     #mask_final : N x K x img x img
  
     mask_final = torch.sum(mask*weights, axis=-1)
-    print("before final pass max no change, ", torch.max(frgb_final[...,-3:]))
-    print("before final pass min no change, ", torch.min(frgb_final[...,-3:]))
+    # print("before final pass max no change, ", torch.max(frgb_final[...,-3:]))
+    # print("before final pass min no change, ", torch.min(frgb_final[...,-3:]))
     return frgb_final.transpose(2, 1).reshape((n, -1, img_size, img_size)), mask_final.reshape((n, semantic_classes, img_size, img_size))
 
     # test case to see if this is working fine or not
