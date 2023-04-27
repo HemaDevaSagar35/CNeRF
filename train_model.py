@@ -377,7 +377,7 @@ def train(rank, world_size, opt):
             if rank == 0:
                 logger.add_scalar("d_loss (global + local)", total_d_loss, discriminator_local.step)
             
-
+            
             #Train the generator
             z_sample_one = z_sampler((real_imgs.shape[0], metadata['z_dim']), device=device, dist=metadata['z_dist'])
             flip = torch.rand(1).to(device)
@@ -405,9 +405,8 @@ def train(rank, world_size, opt):
                         g_img_preds, g_img_positions_pred = discriminator_global_ddp(g_imgs[:,-3:], g_mask)
                         g_sem_img_preds, g_sem_mask_preds = discriminator_local_ddp(g_imgs[:,-3:], g_mask_choice)
 
-                        fake_accuracy_global.append((torch.sigmoid(g_img_preds) < 0.5).item())
-                        fake_accuracy_local.append((torch.sigmoid(g_sem_img_preds) < 0.5).item())
-
+                        fake_accuracy_global.append(g_img_preds)
+                        fake_accuracy_local.append(g_sem_img_preds)
                     #view loss
                     g_position_loss = torch.nn.SmoothL1Loss()(g_img_positions_pred, g_pos) * metadata['pos_lambda']
                     g_cross_entropy = torch.nn.CrossEntropyLoss()(g_sem_mask_preds, semantic_choices) #cross entropy
@@ -435,7 +434,7 @@ def train(rank, world_size, opt):
                 logger.add_scalar('g_loss_entropy', g_cross_entropy.item(), generator_all.step)
                 logger.add_scalar('g_loss_eikonol', metadata['eikonol_lambda']*eikonol_loss.item(), generator_all.step)
                 logger.add_scalar('g_loss_mini_surface', metadata['minimal_surface_lambda']*minimal_surface_loss.item(), generator_all.step)
-                
+
 
             scaler.unscale_(optimizer_G)
             ##Caution: gad clips are not there in original paper, so use it with caution
