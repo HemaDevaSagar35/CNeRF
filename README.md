@@ -10,3 +10,9 @@ Below are the instruction to run the application
    
 
 [Project link](https://hemadevasagar35.github.io/): For more details check the project details webpage.
+
+References\
+[1] https://github.com/MrTornado24/FENeRF
+[2] https://github.com/TianxiangMa/Compositional-NeRF
+[3] https://arxiv.org/pdf/2302.01579.pdf
+
