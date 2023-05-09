@@ -47,6 +47,20 @@ def collapse_segment(segmap):
     segmap[segmap == 16] = 17
     # print(sum(sum(segmap)))
     #0, 1, 2, 3, 4, 6, 8, 10, 13, 14, 15, 17
+    #0, 1, 2, 3, 4, 5, 6,  7,  8,  9, 10, 11
+    #0 background
+    #1 skin/face
+    #2 nose
+    #3 glass?
+    #4 - eyes
+    #6 - eye brow - 5
+    #8 - ear - 6
+    #10 - mouth - 7
+    #13 - hair - 8
+    #14 - hat - 9
+    #15 - ear rings
+    #17 - 
+
     return segmap
 
 
