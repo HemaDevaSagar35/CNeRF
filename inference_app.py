@@ -47,7 +47,7 @@ class InferenceObj():
         self.opt.rendering.N_samples = 24
         # opt.experiment.ckpt = 25000
         self.opt.training.checkpoints_dir = 'checkpoints'
-        self.opt.training.trained_ckpt = '../checkpoints/models_0025000.pt'
+        self.opt.training.trained_ckpt = '../checkpoints/models_0096000.pt'
         # return device, opt
 
     def load_model(self):
