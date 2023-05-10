@@ -8,11 +8,12 @@ Below are the instruction to run the application
 3. Go to the app folder and run the application as \
    ```python app.py```
 
-If you want to do training from scratch, you have run the command
+If you want to do training from scratch, you have to run the command \
 ```python train_CNeRF_modified.py```
 
 But before running this command, you have to adjust the dataset directory parameter dataset_path and checkpoints_dir parameter in options.py
 
+Also you can find the dataset I used [here](https://drive.google.com/drive/folders/1cgYnhTgxmzvmR-cPjT8Hy9RAMA56sW3y?usp=share_link)
 
 [Project link](https://hemadevasagar35.github.io/): For more details check the project details webpage.
 
